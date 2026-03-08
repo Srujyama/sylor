@@ -1,167 +1,126 @@
-"use client";
-
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
-import {
-  Rocket, DollarSign, BarChart2, Megaphone, ShoppingCart, Building2, ArrowRight,
-} from "lucide-react";
+import { ArrowRight } from "lucide-react";
 
 const templates = [
   {
-    icon: Rocket,
-    name: "Startup Launch",
-    category: "Startup",
-    description:
-      "Model your go-to-market strategy. Simulate customer acquisition, burn rate, and market penetration across funding scenarios.",
-    difficulty: "Beginner",
+    name: "startup launch",
+    category: "startup",
+    description: "Model go-to-market strategy. Simulate customer acquisition, burn rate, and market penetration across funding scenarios.",
     agents: ["500 customers", "3 competitors", "12 investors"],
     variables: 8,
     avgSuccess: "67%",
-    color: "violet",
+    difficulty: "beginner",
   },
   {
-    icon: DollarSign,
-    name: "Pricing Strategy",
-    category: "Pricing",
-    description:
-      "Find optimal price points. Simulate elasticity, competitor reactions, and revenue impact across multiple price tiers.",
-    difficulty: "Beginner",
+    name: "pricing strategy",
+    category: "pricing",
+    description: "Find optimal price points. Simulate elasticity, competitor reactions, and revenue impact across multiple price tiers.",
     agents: ["1000 customers", "5 competitors"],
     variables: 6,
     avgSuccess: "82%",
-    color: "green",
+    difficulty: "beginner",
   },
   {
-    icon: BarChart2,
-    name: "Policy Impact",
-    category: "Policy",
-    description:
-      "Test regulatory policies before implementation. Model societal behavior, compliance rates, and economic second-order effects.",
-    difficulty: "Advanced",
+    name: "policy impact",
+    category: "policy",
+    description: "Test regulatory policies before implementation. Model societal behavior, compliance rates, and economic second-order effects.",
     agents: ["10K citizens", "50 companies", "3 regulators"],
     variables: 15,
     avgSuccess: "54%",
-    color: "cyan",
+    difficulty: "advanced",
   },
   {
-    icon: Megaphone,
-    name: "Marketing Campaign",
-    category: "Marketing",
-    description:
-      "Optimize campaign spend. Simulate channel effectiveness, word-of-mouth spread, and brand awareness curves.",
-    difficulty: "Intermediate",
+    name: "marketing campaign",
+    category: "marketing",
+    description: "Optimize campaign spend. Simulate channel effectiveness, word-of-mouth spread, and brand awareness curves.",
     agents: ["2000 customers", "8 competitors"],
     variables: 10,
     avgSuccess: "74%",
-    color: "yellow",
+    difficulty: "intermediate",
   },
   {
-    icon: ShoppingCart,
-    name: "Product Launch",
-    category: "Product",
-    description:
-      "Simulate how your product will be adopted. Model virality, churn, feature demand, and competitive response.",
-    difficulty: "Intermediate",
+    name: "product launch",
+    category: "product",
+    description: "Simulate how your product will be adopted. Model virality, churn, feature demand, and competitive response.",
     agents: ["5000 users", "4 competitors", "tech press"],
     variables: 12,
     avgSuccess: "61%",
-    color: "pink",
+    difficulty: "intermediate",
   },
   {
-    icon: Building2,
-    name: "Market Entry",
-    category: "Strategy",
-    description:
-      "Assess new market opportunities. Simulate incumbents, regulatory barriers, and customer switching costs.",
-    difficulty: "Advanced",
+    name: "market entry",
+    category: "strategy",
+    description: "Assess new market opportunities. Simulate incumbents, regulatory barriers, and customer switching costs.",
     agents: ["3000 customers", "10 incumbents", "2 regulators"],
     variables: 14,
     avgSuccess: "43%",
-    color: "orange",
+    difficulty: "advanced",
   },
 ];
 
-const difficultyColor: Record<string, string> = {
-  Beginner: "success",
-  Intermediate: "warning",
-  Advanced: "destructive",
-};
-
-const iconColor: Record<string, string> = {
-  violet: "text-violet-400 bg-violet-500/20",
-  green: "text-green-400 bg-green-500/20",
-  cyan: "text-cyan-400 bg-cyan-500/20",
-  yellow: "text-yellow-400 bg-yellow-500/20",
-  pink: "text-pink-400 bg-pink-500/20",
-  orange: "text-orange-400 bg-orange-500/20",
+const difficultyColors: Record<string, string> = {
+  beginner: "tag-green",
+  intermediate: "tag-yellow",
+  advanced: "tag-red",
 };
 
 export function Templates() {
   return (
-    <section id="templates" className="py-24 relative">
-      <div className="absolute inset-0 grid-pattern opacity-10" />
-      <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center mb-16">
-          <Badge variant="purple" className="mb-4">Ready to use</Badge>
-          <h2 className="text-4xl sm:text-5xl font-bold mb-4">
-            <span className="text-white">Start with a</span>{" "}
-            <span className="gradient-text">template</span>
-          </h2>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Preconfigured scenarios built by experts. Customize to your needs and run in seconds.
-          </p>
+    <section id="templates" className="py-24 border-t border-white/[0.05]">
+      <div className="max-w-6xl mx-auto px-6">
+        {/* Header */}
+        <div className="flex items-end justify-between mb-12">
+          <div>
+            <span className="tag mb-4 inline-flex">ready to use</span>
+            <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight">
+              start with a template
+            </h2>
+          </div>
+          <Link
+            href="/signup"
+            className="hidden md:inline-flex items-center gap-1.5 text-xs text-white/35 hover:text-white/70 transition-colors"
+          >
+            browse all <ArrowRight className="w-3 h-3" />
+          </Link>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
-          {templates.map((template) => (
-            <Card
-              key={template.name}
-              className="group hover:border-violet-500/30 transition-all duration-300 hover:scale-[1.02] cursor-pointer"
+        {/* Template grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-px bg-white/[0.05]">
+          {templates.map((t) => (
+            <Link
+              key={t.name}
+              href="/signup"
+              className="bg-[#0a0a0a] p-5 hover:bg-white/[0.02] transition-colors group block"
             >
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between mb-3">
-                  <div className={`w-11 h-11 rounded-xl ${iconColor[template.color]} flex items-center justify-center group-hover:scale-110 transition-transform`}>
-                    <template.icon className={`w-5 h-5 ${iconColor[template.color].split(" ")[0]}`} />
-                  </div>
-                  <Badge variant={difficultyColor[template.difficulty] as any} className="text-xs">
-                    {template.difficulty}
-                  </Badge>
-                </div>
-                <CardTitle className="text-base">{template.name}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-xs text-muted-foreground mb-4 leading-relaxed">
-                  {template.description}
-                </p>
+              <div className="flex items-start justify-between mb-3">
+                <span className="tag">{t.category}</span>
+                <span className={`tag ${difficultyColors[t.difficulty]}`}>{t.difficulty}</span>
+              </div>
 
-                {/* Agents */}
-                <div className="flex flex-wrap gap-1 mb-4">
-                  {template.agents.map((agent) => (
-                    <span key={agent} className="text-xs px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-muted-foreground">
-                      {agent}
-                    </span>
-                  ))}
-                </div>
+              <h3 className="text-sm font-semibold text-white mb-2 group-hover:text-white/90">{t.name}</h3>
+              <p className="text-xs text-white/35 leading-relaxed mb-4">{t.description}</p>
 
-                {/* Stats row */}
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">{template.variables} variables</span>
-                  <span className="text-green-400 font-medium">~{template.avgSuccess} avg success</span>
-                </div>
-              </CardContent>
-            </Card>
+              {/* Agents */}
+              <div className="flex flex-wrap gap-1 mb-4">
+                {t.agents.map((a) => (
+                  <span key={a} className="tag text-[10px]">{a}</span>
+                ))}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between text-xs border-t border-white/[0.06] pt-3 mt-auto">
+                <span className="text-white/25">{t.variables} variables</span>
+                <span className="text-emerald-400">{t.avgSuccess} avg success</span>
+              </div>
+            </Link>
           ))}
         </div>
 
-        <div className="text-center">
-          <Button variant="gradient" size="lg" asChild className="group">
-            <Link href="/signup">
-              Browse all templates
-              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-            </Link>
-          </Button>
+        {/* Mobile CTA */}
+        <div className="mt-6 md:hidden">
+          <Link href="/signup" className="btn-ghost w-full justify-center">
+            browse all templates
+          </Link>
         </div>
       </div>
     </section>

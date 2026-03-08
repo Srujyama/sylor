@@ -4,31 +4,37 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium transition-colors focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40 [&_svg]:pointer-events-none [&_svg]:size-3.5 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
+        // Primary = white fill, black text (btn-primary style)
         default:
-          "bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg hover:shadow-primary/25 hover:scale-[1.02] active:scale-[0.98]",
+          "bg-[#ededed] text-[#0a0a0a] border border-[#ededed] hover:bg-white hover:border-white",
+        // Ghost = transparent, dim border
+        ghost:
+          "bg-transparent text-white/60 border border-white/10 hover:bg-white/[0.04] hover:text-white/90 hover:border-white/18",
+        // Destructive
         destructive:
-          "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+          "bg-red-500 text-white border border-red-500 hover:bg-red-400",
+        // Outline — alias for ghost
         outline:
-          "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
+          "bg-transparent text-white/60 border border-white/10 hover:bg-white/[0.04] hover:text-white/90",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost: "hover:bg-accent hover:text-accent-foreground",
-        link: "text-primary underline-offset-4 hover:underline",
+          "bg-white/[0.06] text-white/70 border border-white/10 hover:bg-white/[0.10]",
+        link: "text-white/60 underline-offset-4 hover:underline hover:text-white/90",
+        // Legacy aliases — map to sensible equivalents
         gradient:
-          "bg-gradient-to-r from-violet-600 to-cyan-600 text-white hover:from-violet-500 hover:to-cyan-500 shadow-lg hover:shadow-violet-500/25 hover:scale-[1.02] active:scale-[0.98]",
-        "glass":
-          "glass text-white hover:bg-white/10 border border-white/10 hover:border-white/20 transition-all",
+          "bg-[#ededed] text-[#0a0a0a] border border-[#ededed] hover:bg-white hover:border-white",
+        glass:
+          "bg-transparent text-white/60 border border-white/10 hover:bg-white/[0.04] hover:text-white/90 hover:border-white/18",
       },
       size: {
-        default: "h-10 px-4 py-2",
-        sm: "h-9 rounded-md px-3",
-        lg: "h-12 rounded-lg px-8 text-base",
-        xl: "h-14 rounded-xl px-10 text-lg",
-        icon: "h-10 w-10",
+        default: "h-9 px-4 py-2 text-xs",
+        sm: "h-8 px-3 py-1.5 text-xs",
+        lg: "h-10 px-6 py-2.5 text-sm",
+        xl: "h-11 px-8 text-sm",
+        icon: "h-9 w-9",
       },
     },
     defaultVariants: {

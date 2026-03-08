@@ -4,14 +4,7 @@ export const dynamic = 'force-dynamic';
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import {
-  Plus, TrendingUp, Activity, Zap, Clock, ArrowRight,
-  CheckCircle2, Loader2, XCircle,
-} from "lucide-react";
+import { Plus, ArrowRight, TrendingUp, Activity, Zap, Clock } from "lucide-react";
 import { onAuthChange } from "@/lib/firebase/auth";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -28,18 +21,32 @@ const mockActivity = [
 ];
 
 const recentSimulations = [
-  { id: "1", name: "SaaS Startup Launch Q1", status: "completed", successProb: 73, category: "Startup", updatedAt: "2 hours ago" },
-  { id: "2", name: "Pricing Experiment v3", status: "running", successProb: null, category: "Pricing", updatedAt: "Just now" },
-  { id: "3", name: "EU Market Entry", status: "completed", successProb: 41, category: "Strategy", updatedAt: "1 day ago" },
-  { id: "4", name: "Marketing Channel Mix", status: "failed", successProb: null, category: "Marketing", updatedAt: "2 days ago" },
-  { id: "5", name: "Product Feature Rollout", status: "completed", successProb: 88, category: "Product", updatedAt: "3 days ago" },
+  { id: "1", name: "SaaS Startup Launch Q1", status: "completed", successProb: 73, category: "startup", updatedAt: "2 hours ago" },
+  { id: "2", name: "Pricing Experiment v3", status: "running", successProb: null, category: "pricing", updatedAt: "just now" },
+  { id: "3", name: "EU Market Entry", status: "completed", successProb: 41, category: "strategy", updatedAt: "1 day ago" },
+  { id: "4", name: "Marketing Channel Mix", status: "failed", successProb: null, category: "marketing", updatedAt: "2 days ago" },
+  { id: "5", name: "Product Feature Rollout", status: "completed", successProb: 88, category: "product", updatedAt: "3 days ago" },
 ];
 
-const statusConfig = {
-  completed: { icon: CheckCircle2, color: "text-green-400", label: "Completed", badge: "success" as const },
-  running: { icon: Loader2, color: "text-violet-400 animate-spin", label: "Running", badge: "purple" as const },
-  failed: { icon: XCircle, color: "text-red-400", label: "Failed", badge: "destructive" as const },
-  draft: { icon: Clock, color: "text-yellow-400", label: "Draft", badge: "warning" as const },
+const statusDot: Record<string, string> = {
+  completed: "dot-green",
+  running: "dot-blue",
+  failed: "dot-red",
+  draft: "dot-yellow",
+};
+
+const statusLabel: Record<string, string> = {
+  completed: "completed",
+  running: "running",
+  failed: "failed",
+  draft: "draft",
+};
+
+const statusTagClass: Record<string, string> = {
+  completed: "tag-green",
+  running: "tag-blue",
+  failed: "tag-red",
+  draft: "tag-yellow",
 };
 
 export default function DashboardPage() {
@@ -57,154 +64,134 @@ export default function DashboardPage() {
   }, []);
 
   const stats = [
-    { label: "Total Simulations", value: "24", delta: "+4 this month", icon: Activity, color: "violet" },
-    { label: "Avg Success Rate", value: "68%", delta: "+5% vs last month", icon: TrendingUp, color: "green" },
-    { label: "Runs Executed", value: "48K", delta: "Across all scenarios", icon: Zap, color: "cyan" },
-    { label: "Time Saved", value: "~120h", delta: "vs manual analysis", icon: Clock, color: "yellow" },
+    { label: "total simulations", value: "24", delta: "+4 this month", icon: Activity },
+    { label: "avg success rate", value: "68%", delta: "+5% vs last month", icon: TrendingUp },
+    { label: "runs executed", value: "48K", delta: "across all scenarios", icon: Zap },
+    { label: "time saved", value: "~120h", delta: "vs manual analysis", icon: Clock },
   ];
 
-  const iconColors: Record<string, string> = {
-    violet: "text-violet-400 bg-violet-500/20",
-    green: "text-green-400 bg-green-500/20",
-    cyan: "text-cyan-400 bg-cyan-500/20",
-    yellow: "text-yellow-400 bg-yellow-500/20",
-  };
-
   return (
-    <div className="p-8 max-w-7xl">
+    <div className="p-8 max-w-6xl">
       {/* Header */}
-      <div className="flex items-center justify-between mb-10">
+      <div className="flex items-start justify-between mb-10">
         <div>
-          <h1 className="text-3xl font-bold text-white mb-1">
-            Good morning, {userName} 👋
+          <p className="text-xs text-white/25 mb-1 tracking-wide">sylor / dashboard</p>
+          <h1 className="text-2xl font-bold text-white tracking-tight">
+            good morning, {userName}
           </h1>
-          <p className="text-muted-foreground">
-            Here&apos;s what&apos;s happening with your simulations
-          </p>
         </div>
-        <Button variant="gradient" asChild>
-          <Link href="/simulations/new">
-            <Plus className="w-4 h-4" />
-            New Simulation
-          </Link>
-        </Button>
+        <Link href="/simulations/new" className="btn-primary text-xs py-2 px-4 inline-flex items-center gap-1.5">
+          <Plus className="w-3 h-3" />
+          new simulation
+        </Link>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-white/[0.05] mb-8">
         {stats.map((stat) => (
-          <Card key={stat.label} className="group hover:border-white/20 transition-all">
-            <CardContent className="p-5">
-              <div className="flex items-start justify-between mb-4">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${iconColors[stat.color]}`}>
-                  <stat.icon className="w-5 h-5" />
-                </div>
-              </div>
-              <div className="text-2xl font-bold text-white mb-0.5">{stat.value}</div>
-              <div className="text-xs text-muted-foreground">{stat.label}</div>
-              <div className="text-xs text-green-400 mt-1">{stat.delta}</div>
-            </CardContent>
-          </Card>
+          <div key={stat.label} className="bg-[#0a0a0a] p-5">
+            <div className="text-2xl font-bold text-white tracking-tight mb-1">{stat.value}</div>
+            <div className="text-xs text-white/30 mb-0.5">{stat.label}</div>
+            <div className="text-xs text-emerald-400/70">{stat.delta}</div>
+          </div>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-px bg-white/[0.05] mb-8">
         {/* Activity chart */}
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle className="text-base">Simulation Activity</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={200}>
-              <AreaChart data={mockActivity} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
-                <defs>
-                  <linearGradient id="simGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="successGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#06b6d4" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false} />
-                <Tooltip
-                  contentStyle={{ background: "rgba(0,0,0,0.8)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", fontSize: 12 }}
-                  labelStyle={{ color: "white" }}
-                />
-                <Area type="monotone" dataKey="simulations" stroke="#8b5cf6" strokeWidth={2} fill="url(#simGrad)" name="Total" />
-                <Area type="monotone" dataKey="success" stroke="#06b6d4" strokeWidth={2} fill="url(#successGrad)" name="Successful" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
+        <div className="bg-[#0a0a0a] p-5 lg:col-span-2">
+          <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">simulation activity</div>
+          <ResponsiveContainer width="100%" height={180}>
+            <AreaChart data={mockActivity} margin={{ top: 5, right: 0, left: -20, bottom: 0 }}>
+              <defs>
+                <linearGradient id="simGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="rgba(255,255,255,0.15)" stopOpacity={1} />
+                  <stop offset="95%" stopColor="rgba(255,255,255,0)" stopOpacity={1} />
+                </linearGradient>
+                <linearGradient id="successGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="rgba(74,222,128,0.15)" stopOpacity={1} />
+                  <stop offset="95%" stopColor="rgba(74,222,128,0)" stopOpacity={1} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+              <XAxis dataKey="month" tick={{ fontSize: 10, fill: "rgba(255,255,255,0.25)", fontFamily: "inherit" }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: "rgba(255,255,255,0.25)", fontFamily: "inherit" }} axisLine={false} tickLine={false} />
+              <Tooltip
+                contentStyle={{
+                  background: "#111",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: "0",
+                  fontSize: 11,
+                  fontFamily: "inherit",
+                }}
+                labelStyle={{ color: "rgba(255,255,255,0.7)" }}
+                itemStyle={{ color: "rgba(255,255,255,0.5)" }}
+              />
+              <Area type="monotone" dataKey="simulations" stroke="rgba(255,255,255,0.3)" strokeWidth={1.5} fill="url(#simGrad)" name="total" />
+              <Area type="monotone" dataKey="success" stroke="rgba(74,222,128,0.5)" strokeWidth={1.5} fill="url(#successGrad)" name="successful" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
 
-        {/* Quick actions */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Quick Start</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
+        {/* Quick start */}
+        <div className="bg-[#0a0a0a] p-5">
+          <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">quick start</div>
+          <div className="space-y-0.5">
             {[
-              { label: "Startup Launch", icon: "🚀", href: "/simulations/new?template=startup" },
-              { label: "Pricing Strategy", icon: "💰", href: "/simulations/new?template=pricing" },
-              { label: "Market Entry", icon: "🌍", href: "/simulations/new?template=market-entry" },
-              { label: "Custom Simulation", icon: "⚡", href: "/simulations/new" },
+              { label: "startup launch", href: "/simulations/new?template=startup" },
+              { label: "pricing strategy", href: "/simulations/new?template=pricing" },
+              { label: "market entry", href: "/simulations/new?template=market-entry" },
+              { label: "custom simulation", href: "/simulations/new" },
             ].map((item) => (
               <Link
                 key={item.label}
                 href={item.href}
-                className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/5 hover:border-violet-500/30 hover:bg-violet-500/5 transition-all group"
+                className="flex items-center justify-between px-3 py-2.5 text-xs text-white/40 hover:text-white/80 hover:bg-white/[0.03] transition-colors group"
               >
-                <span className="text-lg">{item.icon}</span>
-                <span className="text-sm text-muted-foreground group-hover:text-white transition-colors flex-1">{item.label}</span>
-                <ArrowRight className="w-3.5 h-3.5 text-muted-foreground group-hover:text-violet-400 group-hover:translate-x-0.5 transition-all" />
+                <span>{item.label}</span>
+                <ArrowRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
               </Link>
             ))}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
 
       {/* Recent simulations */}
-      <Card>
-        <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">Recent Simulations</CardTitle>
-          <Button variant="ghost" size="sm" asChild>
-            <Link href="/simulations">View all <ArrowRight className="w-3.5 h-3.5 ml-1" /></Link>
-          </Button>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {recentSimulations.map((sim) => {
-              const status = statusConfig[sim.status as keyof typeof statusConfig];
-              return (
-                <Link
-                  key={sim.id}
-                  href={`/simulations/${sim.id}`}
-                  className="flex items-center gap-4 p-4 rounded-xl bg-white/5 border border-white/5 hover:border-violet-500/20 hover:bg-violet-500/5 transition-all group"
-                >
-                  <status.icon className={`w-4 h-4 flex-shrink-0 ${status.color}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-white truncate">{sim.name}</div>
-                    <div className="text-xs text-muted-foreground">{sim.updatedAt}</div>
+      <div className="surface">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.06]">
+          <span className="text-xs text-white/25 tracking-widest uppercase">recent simulations</span>
+          <Link href="/simulations" className="text-xs text-white/25 hover:text-white/60 transition-colors flex items-center gap-1">
+            view all <ArrowRight className="w-3 h-3" />
+          </Link>
+        </div>
+
+        <div>
+          {recentSimulations.map((sim, i) => (
+            <Link
+              key={sim.id}
+              href={`/simulations/${sim.id}`}
+              className={`flex items-center gap-4 px-5 py-3.5 hover:bg-white/[0.025] transition-colors group ${i < recentSimulations.length - 1 ? "border-b border-white/[0.04]" : ""}`}
+            >
+              <span className={`dot ${statusDot[sim.status]} shrink-0`} />
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-medium text-white/80 truncate group-hover:text-white transition-colors">{sim.name}</div>
+                <div className="text-xs text-white/25 mt-0.5">{sim.updatedAt}</div>
+              </div>
+              <span className={`tag ${statusTagClass[sim.status]} shrink-0`}>{statusLabel[sim.status]}</span>
+              <span className="tag shrink-0">{sim.category}</span>
+              {sim.successProb !== null && (
+                <div className="flex items-center gap-2 w-24 shrink-0">
+                  <div className="progress-bar flex-1">
+                    <div className="progress-fill" style={{ width: `${sim.successProb}%` }} />
                   </div>
-                  <Badge variant={status.badge}>{status.label}</Badge>
-                  <Badge variant="outline" className="text-xs">{sim.category}</Badge>
-                  {sim.successProb !== null && (
-                    <div className="flex items-center gap-2 w-28">
-                      <Progress value={sim.successProb} className="h-1.5" />
-                      <span className="text-xs text-muted-foreground w-8">{sim.successProb}%</span>
-                    </div>
-                  )}
-                  <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-violet-400 transition-colors flex-shrink-0" />
-                </Link>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
+                  <span className="text-xs text-white/35 w-7 text-right">{sim.successProb}%</span>
+                </div>
+              )}
+              <ArrowRight className="w-3 h-3 text-white/20 group-hover:text-white/50 transition-colors shrink-0" />
+            </Link>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
