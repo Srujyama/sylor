@@ -7,6 +7,7 @@ const stats = [
   { label: "simulations run", value: "2.4M+" },
   { label: "avg success rate", value: "73%" },
   { label: "active users", value: "12K+" },
+  { label: "domains supported", value: "6+" },
 ];
 
 export function Hero() {
@@ -18,7 +19,7 @@ export function Hero() {
       {/* Subtle horizontal rule at top */}
       <div className="absolute top-14 left-0 right-0 h-px bg-white/[0.04]" />
 
-      <div className="relative z-10 max-w-6xl mx-auto px-6 py-24">
+      <div className="relative z-10 max-w-[1440px] mx-auto px-8 py-24">
         {/* Eyebrow */}
         <div className="mb-8">
           <span className="tag">multi-agent AI simulation</span>
@@ -32,8 +33,8 @@ export function Hero() {
 
         {/* Sub */}
         <p className="text-sm text-white/45 max-w-xl mb-10 leading-relaxed">
-          Run thousands of AI simulations to predict outcomes before committing to business decisions.
-          Model markets, competitors, customers, and economic forces — no code required.
+          Run thousands of AI simulations across business, finance, and molecular biology.
+          Upload your data, model markets, proteins, or portfolios — and predict outcomes before committing.
         </p>
 
         {/* CTAs */}
@@ -58,7 +59,7 @@ export function Hero() {
         </div>
 
         {/* Terminal mockup */}
-        <div className="surface max-w-4xl overflow-hidden">
+        <div className="surface max-w-5xl overflow-hidden">
           {/* Header bar */}
           <div className="flex items-center gap-3 px-5 py-3 border-b border-white/[0.06] bg-white/[0.02]">
             <div className="flex gap-1.5">
@@ -66,7 +67,7 @@ export function Hero() {
               <div className="w-2.5 h-2.5 rounded-full bg-white/10" />
               <div className="w-2.5 h-2.5 rounded-full bg-white/10" />
             </div>
-            <span className="text-xs text-white/20 font-mono">sylor.ai / simulations / startup-launch</span>
+            <span className="text-xs text-white/20 font-mono">sylor.ai / simulations / multi-domain</span>
           </div>
 
           {/* Content */}
@@ -102,9 +103,9 @@ export function Hero() {
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {[
                   { label: "customers", count: 500, dotClass: "dot-blue" },
-                  { label: "competitors", count: 3, dotClass: "dot-red" },
-                  { label: "investors", count: 12, dotClass: "dot-yellow" },
-                  { label: "regulators", count: 2, dotClass: "dot-green" },
+                  { label: "traders", count: 24, dotClass: "dot-yellow" },
+                  { label: "molecules", count: 128, dotClass: "dot-green" },
+                  { label: "data streams", count: 6, dotClass: "dot-red" },
                 ].map((a) => (
                   <div key={a.label} className="flex items-center gap-2">
                     <span className={`dot ${a.dotClass}`} />

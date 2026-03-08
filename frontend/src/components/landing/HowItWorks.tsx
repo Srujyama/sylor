@@ -28,7 +28,7 @@ const steps = [
 export function HowItWorks() {
   return (
     <section id="how-it-works" className="py-24 border-t border-white/[0.05]">
-      <div className="max-w-6xl mx-auto px-6">
+      <div className="max-w-[1440px] mx-auto px-8">
         {/* Header */}
         <div className="mb-16">
           <span className="tag mb-4 inline-flex">simple process</span>

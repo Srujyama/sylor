@@ -1,6 +1,6 @@
 """
-SimWorld FastAPI Backend
-Multi-Agent AI Simulation Platform
+Sylor FastAPI Backend
+Multi-Domain AI Simulation Platform
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,12 +8,12 @@ from fastapi.responses import JSONResponse
 import time
 
 from app.config import settings
-from app.routers import simulations, templates
+from app.routers import simulations, templates, upload
 
 app = FastAPI(
-    title="SimWorld API",
-    description="Multi-Agent AI Simulation Platform API",
-    version="1.0.0",
+    title="Sylor API",
+    description="Multi-Domain AI Simulation Platform API",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -30,13 +30,14 @@ app.add_middleware(
 # Routers
 app.include_router(simulations.router)
 app.include_router(templates.router)
+app.include_router(upload.router)
 
 
 @app.get("/")
 async def root():
     return {
-        "service": "SimWorld API",
-        "version": "1.0.0",
+        "service": "Sylor API",
+        "version": "2.0.0",
         "status": "healthy",
         "docs": "/docs",
     }

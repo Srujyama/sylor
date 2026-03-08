@@ -85,7 +85,7 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
   }
 
   return (
-    <div className="p-8 max-w-7xl">
+    <div className="p-8">
       {/* Header */}
       <div className="flex items-start justify-between mb-8">
         <div className="flex items-start gap-4">

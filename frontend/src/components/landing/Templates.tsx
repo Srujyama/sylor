@@ -56,6 +56,33 @@ const templates = [
     avgSuccess: "43%",
     difficulty: "advanced",
   },
+  {
+    name: "stock market forecast",
+    category: "finance",
+    description: "Predict price movements and optimize entry points. Simulate trader behavior, order flow, and macro events across multiple assets.",
+    agents: ["24 traders", "4 market makers", "6 data streams"],
+    variables: 10,
+    avgSuccess: "62%",
+    difficulty: "intermediate",
+  },
+  {
+    name: "molecular dynamics",
+    category: "biology",
+    description: "Model protein folding trends and molecular interactions. Simulate binding affinity, conformational changes, and enzymatic reactions.",
+    agents: ["128 molecules", "8 enzymes", "4 substrates"],
+    variables: 12,
+    avgSuccess: "71%",
+    difficulty: "advanced",
+  },
+  {
+    name: "trend analyzer",
+    category: "trend",
+    description: "Upload any time-series data and detect hidden patterns. Forecast future trends with confidence intervals and seasonality detection.",
+    agents: ["6 data streams", "3 pattern detectors"],
+    variables: 8,
+    avgSuccess: "78%",
+    difficulty: "beginner",
+  },
 ];
 
 const difficultyColors: Record<string, string> = {
@@ -67,7 +94,7 @@ const difficultyColors: Record<string, string> = {
 export function Templates() {
   return (
     <section id="templates" className="py-24 border-t border-white/[0.05]">
-      <div className="max-w-6xl mx-auto px-6">
+      <div className="max-w-[1440px] mx-auto px-8">
         {/* Header */}
         <div className="flex items-end justify-between mb-12">
           <div>

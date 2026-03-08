@@ -13,6 +13,7 @@ const plans = [
       "5 simulations / month",
       "100 runs per simulation",
       "6 agent templates",
+      "3 domain types",
       "basic charts & dashboards",
       "3 variable inputs",
       "community support",
@@ -29,6 +30,8 @@ const plans = [
       "unlimited simulations",
       "10,000 runs per simulation",
       "all agent types + custom",
+      "all domains + data upload",
+      "CSV/Excel data import",
       "advanced visualizations",
       "unlimited variables",
       "save & compare strategies",
@@ -47,7 +50,9 @@ const plans = [
     features: [
       "everything in pro",
       "unlimited team members",
-      "real-world data integration",
+      "custom domain models",
+      "API data integration",
+      "real-world data feeds",
       "custom agent behaviors",
       "API access",
       "collaboration tools",
@@ -67,7 +72,7 @@ export function Pricing() {
 
   return (
     <section id="pricing" className="py-24 border-t border-white/[0.05]">
-      <div className="max-w-6xl mx-auto px-6">
+      <div className="max-w-[1440px] mx-auto px-8">
         {/* Header */}
         <div className="mb-12">
           <span className="tag mb-4 inline-flex">transparent pricing</span>

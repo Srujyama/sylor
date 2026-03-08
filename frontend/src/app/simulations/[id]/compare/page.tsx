@@ -81,7 +81,7 @@ const scenarios = [
 
 export default function ComparePage({ params }: { params: { id: string } }) {
   return (
-    <div className="p-8 max-w-6xl">
+    <div className="p-8">
       <div className="flex items-center gap-4 mb-8">
         <Button variant="ghost" size="icon" asChild>
           <Link href={`/simulations/${params.id}`}><ArrowLeft className="w-4 h-4" /></Link>

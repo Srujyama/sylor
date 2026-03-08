@@ -18,6 +18,11 @@ class AgentType(str, Enum):
     REGULATOR = "regulator"
     INVESTOR = "investor"
     MARKET = "market"
+    TRADER = "trader"
+    MARKET_MAKER = "market_maker"
+    MOLECULE = "molecule"
+    ENZYME = "enzyme"
+    DATA_STREAM = "data_stream"
 
 
 class SimulationCategory(str, Enum):
@@ -26,6 +31,9 @@ class SimulationCategory(str, Enum):
     POLICY = "policy"
     MARKETING = "marketing"
     PRODUCT = "product"
+    FINANCE = "finance"
+    BIOLOGY = "biology"
+    TREND = "trend"
     CUSTOM = "custom"
 
 
@@ -58,6 +66,7 @@ class SimulationConfig(BaseModel):
     num_runs: int = Field(ge=100, le=10000, default=1000)
     time_horizon: int = Field(ge=1, le=120, default=12)  # months
     template_id: Optional[str] = None
+    uploaded_data: Optional[Dict[str, List[float]]] = None  # column name → values
 
 
 class TimelinePoint(BaseModel):

@@ -20,11 +20,30 @@ async def generate_ai_insights(
         [f"- {a.type.value}: {a.count} agents (sensitivity: {a.sensitivity})" for a in config.agents]
     )
 
-    prompt = f"""You are an expert business strategy consultant analyzing AI simulation results.
+    # Domain-aware role selection
+    category = config.category.value
+    if category == "finance":
+        role = "You are an expert quantitative finance analyst and portfolio strategist analyzing AI-driven market simulation results."
+        metric_label = "portfolio return"
+        metric_value = f"{results.avg_revenue:,.0f} (PnL)"
+    elif category == "biology":
+        role = "You are an expert computational biologist and molecular dynamics researcher analyzing AI simulation results of molecular interactions."
+        metric_label = "binding rate"
+        metric_value = f"{results.avg_revenue:.1f}% binding"
+    elif category == "trend":
+        role = "You are an expert data scientist specializing in time-series forecasting and trend analysis, analyzing AI simulation results."
+        metric_label = "forecast accuracy"
+        metric_value = f"{results.avg_revenue:.1f}% accuracy"
+    else:
+        role = "You are an expert business strategy consultant analyzing AI simulation results."
+        metric_label = "average revenue at end"
+        metric_value = f"${results.avg_revenue:,.0f}/month"
+
+    prompt = f"""{role}
 
 SIMULATION: {config.name}
 CATEGORY: {config.category.value}
-TIME HORIZON: {config.time_horizon} months
+TIME HORIZON: {config.time_horizon} {"steps" if category == "biology" else "months"}
 RUNS: {config.num_runs}
 
 VARIABLES:
@@ -36,9 +55,9 @@ AGENTS:
 RESULTS:
 - Success probability: {results.success_probability}%
 - Confidence interval: {results.confidence_interval[0]}% — {results.confidence_interval[1]}%
-- Average revenue at end: ${results.avg_revenue:,.0f}/month
-- Average market share: {results.avg_market_share:.2f}%
-- Average break-even: month {results.avg_breakeven_month:.1f}
+- {metric_label}: {metric_value}
+- Average market share / score: {results.avg_market_share:.2f}%
+- Average break-even / convergence: month {results.avg_breakeven_month:.1f}
 
 Provide a structured analysis with:
 1. 5 specific, actionable key insights based on the data

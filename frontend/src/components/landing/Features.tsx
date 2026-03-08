@@ -58,7 +58,7 @@ const features = [
 export function Features() {
   return (
     <section id="features" className="py-24 border-t border-white/[0.05]">
-      <div className="max-w-6xl mx-auto px-6">
+      <div className="max-w-[1440px] mx-auto px-8">
         {/* Section header */}
         <div className="flex items-start justify-between mb-16">
           <div className="max-w-lg">

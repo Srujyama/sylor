@@ -117,6 +117,171 @@ class MarketForceAgent(Agent):
         return {"trend_multiplier": multiplier, "recession": self.state["recession"]}
 
 
+class TraderAgent(Agent):
+    """Simulates trader behavior with momentum/mean-reversion strategies."""
+
+    def __init__(self, count: int, sensitivity: float):
+        super().__init__("trader", count, sensitivity)
+        self.state = {
+            "position": 0,
+            "pnl": 0,
+            "strategy": random.choice(["momentum", "mean_reversion"]),
+        }
+
+    def react(self, market_state: Dict, variables: Dict) -> Dict:
+        price = market_state.get("price", 100)
+        prev_price = market_state.get("prev_price", price)
+        volatility = variables.get("volatility", 20) / 100
+
+        if self.state["strategy"] == "momentum":
+            signal = (price - prev_price) / max(prev_price, 0.01)
+            if signal > 0.01 * self.sensitivity:
+                action = "buy"
+                self.state["position"] += random.randint(1, 10)
+            elif signal < -0.01 * self.sensitivity:
+                action = "sell"
+                self.state["position"] = max(0, self.state["position"] - random.randint(1, 10))
+            else:
+                action = "hold"
+        else:  # mean reversion
+            ma = market_state.get("moving_avg", price)
+            if price < ma * (1 - 0.02 * self.sensitivity):
+                action = "buy"
+                self.state["position"] += random.randint(1, 10)
+            elif price > ma * (1 + 0.02 * self.sensitivity):
+                action = "sell"
+                self.state["position"] = max(0, self.state["position"] - random.randint(1, 10))
+            else:
+                action = "hold"
+
+        self.state["pnl"] += self.state["position"] * (price - prev_price)
+        return {"action": action, "position": self.state["position"], "pnl": self.state["pnl"]}
+
+
+class MarketMakerAgent(Agent):
+    """Liquidity provider that adjusts bid/ask spreads."""
+
+    def __init__(self, count: int, sensitivity: float):
+        super().__init__("market_maker", count, sensitivity)
+        self.state = {"spread": 0.5, "inventory": 0}
+
+    def react(self, market_state: Dict, variables: Dict) -> Dict:
+        volatility = variables.get("volatility", 20) / 100
+        volume = market_state.get("volume", 1000)
+
+        # Widen spread in high volatility
+        self.state["spread"] = max(0.1, 0.5 + volatility * 2 * self.sensitivity)
+        # Adjust inventory based on order flow
+        flow_imbalance = random.gauss(0, volume * 0.01)
+        self.state["inventory"] += flow_imbalance
+
+        return {"spread": self.state["spread"], "inventory": self.state["inventory"]}
+
+
+class MoleculeAgent(Agent):
+    """Simulates molecular binding and conformational changes."""
+
+    def __init__(self, count: int, sensitivity: float):
+        super().__init__("molecule", count, sensitivity)
+        self.state = {"bound": False, "energy": random.gauss(-5, 2), "conformation": 0}
+
+    def react(self, market_state: Dict, variables: Dict) -> Dict:
+        temperature = variables.get("temperature", 310)
+        kd = variables.get("binding_affinity", 10)
+        concentration = variables.get("concentration", 100)
+        ph = variables.get("ph_level", 7.4)
+
+        # Boltzmann binding probability
+        kT = 0.00198 * temperature  # kcal/mol
+        binding_prob = concentration / (concentration + kd) * self.sensitivity
+        # pH effect
+        if abs(ph - 7.4) > 1:
+            binding_prob *= max(0.3, 1 - abs(ph - 7.4) * 0.2)
+
+        noise = random.gauss(0, 0.1)
+        if not self.state["bound"] and random.random() < binding_prob + noise:
+            self.state["bound"] = True
+            self.state["energy"] -= random.uniform(1, 5)
+        elif self.state["bound"] and random.random() < 0.05 / self.sensitivity:
+            self.state["bound"] = False
+            self.state["energy"] += random.uniform(1, 3)
+
+        # Conformational changes
+        self.state["conformation"] += random.gauss(0, kT * 0.5)
+
+        return {
+            "bound": self.state["bound"],
+            "energy": self.state["energy"],
+            "conformation": self.state["conformation"],
+        }
+
+
+class EnzymeAgent(Agent):
+    """Catalytic agent affecting reaction rates."""
+
+    def __init__(self, count: int, sensitivity: float):
+        super().__init__("enzyme", count, sensitivity)
+        self.state = {"active": True, "catalytic_rate": random.uniform(50, 200), "substrate_processed": 0}
+
+    def react(self, market_state: Dict, variables: Dict) -> Dict:
+        temperature = variables.get("temperature", 310)
+        ph = variables.get("ph_level", 7.4)
+
+        # Enzyme activity depends on temperature and pH
+        temp_factor = max(0, 1 - abs(temperature - 310) / 100) if temperature < 350 else 0
+        ph_factor = max(0, 1 - abs(ph - 7.4) / 3)
+
+        effective_rate = self.state["catalytic_rate"] * temp_factor * ph_factor * self.sensitivity
+        substrate = int(effective_rate * random.gauss(1, 0.2))
+        self.state["substrate_processed"] += max(0, substrate)
+
+        # Denaturation at extreme conditions
+        if temperature > 340 or ph < 4 or ph > 10:
+            if random.random() < 0.1:
+                self.state["active"] = False
+                effective_rate = 0
+
+        return {
+            "active": self.state["active"],
+            "rate": effective_rate,
+            "processed": self.state["substrate_processed"],
+        }
+
+
+class DataStreamAgent(Agent):
+    """Time-series data feed for trend detection and signal generation."""
+
+    def __init__(self, count: int, sensitivity: float):
+        super().__init__("data_stream", count, sensitivity)
+        self.state = {
+            "trend": random.gauss(0.001, 0.005),
+            "seasonality_phase": random.uniform(0, 2 * 3.14159),
+            "noise_level": 0.02,
+        }
+
+    def react(self, market_state: Dict, variables: Dict) -> Dict:
+        step = market_state.get("step", 1)
+        seasonality_period = variables.get("seasonality_period", 12)
+        trend_strength = variables.get("trend_strength", 50) / 100
+        noise_level = variables.get("noise_level", 15) / 100
+
+        # Generate signal: trend + seasonality + noise
+        trend_component = self.state["trend"] * trend_strength * step
+        seasonal_component = math.sin(2 * math.pi * step / max(seasonality_period, 1) + self.state["seasonality_phase"]) * 0.05
+        noise_component = random.gauss(0, noise_level)
+
+        signal = trend_component + seasonal_component + noise_component
+        # Detect pattern
+        is_trend = abs(trend_component) > abs(noise_component)
+
+        return {
+            "signal": signal,
+            "trend_component": trend_component,
+            "seasonal_component": seasonal_component,
+            "pattern_detected": is_trend,
+        }
+
+
 class SimulationEngine:
     """Monte Carlo simulation engine with multi-agent interactions."""
 
@@ -130,19 +295,30 @@ class SimulationEngine:
     def _create_agents(self):
         agents = []
         for agent_cfg in self.config.agents:
-            if agent_cfg.type.value == "customer":
+            agent_type = agent_cfg.type.value
+            if agent_type == "customer":
                 agents.append(CustomerAgent(
                     agent_cfg.count,
                     agent_cfg.sensitivity,
                     self._get_variable("price_per_unit", 99),
                     self._get_variable("market_size", 1_000_000),
                 ))
-            elif agent_cfg.type.value == "competitor":
+            elif agent_type == "competitor":
                 agents.append(CompetitorAgent(agent_cfg.count, agent_cfg.sensitivity))
-            elif agent_cfg.type.value == "investor":
+            elif agent_type == "investor":
                 agents.append(InvestorAgent(agent_cfg.count, agent_cfg.sensitivity))
-            elif agent_cfg.type.value == "market":
+            elif agent_type == "market":
                 agents.append(MarketForceAgent(agent_cfg.sensitivity))
+            elif agent_type == "trader":
+                agents.append(TraderAgent(agent_cfg.count, agent_cfg.sensitivity))
+            elif agent_type == "market_maker":
+                agents.append(MarketMakerAgent(agent_cfg.count, agent_cfg.sensitivity))
+            elif agent_type == "molecule":
+                agents.append(MoleculeAgent(agent_cfg.count, agent_cfg.sensitivity))
+            elif agent_type == "enzyme":
+                agents.append(EnzymeAgent(agent_cfg.count, agent_cfg.sensitivity))
+            elif agent_type == "data_stream":
+                agents.append(DataStreamAgent(agent_cfg.count, agent_cfg.sensitivity))
         return agents
 
     def _run_single(self, variables: Optional[Dict] = None) -> Dict[str, Any]:
@@ -151,6 +327,18 @@ class SimulationEngine:
         if variables:
             vars_.update(variables)
 
+        category = self.config.category.value
+        if category in ("finance",):
+            return self._run_finance(vars_)
+        elif category in ("biology",):
+            return self._run_biology(vars_)
+        elif category in ("trend",):
+            return self._run_trend(vars_)
+        else:
+            return self._run_business(vars_)
+
+    def _run_business(self, vars_: Dict) -> Dict[str, Any]:
+        """Run a business/startup simulation."""
         agents = self._create_agents()
         budget = vars_.get("budget", 50000)
         price = vars_.get("price_per_unit", 99)
@@ -160,7 +348,6 @@ class SimulationEngine:
         customers = 0
         total_funding = 0
         prev_revenue = 0
-        success = False
 
         for month in range(1, self.config.time_horizon + 1):
             market_state = {
@@ -171,21 +358,18 @@ class SimulationEngine:
                 "month_growth": (customers - (timeline[-1]["customers"] if timeline else 0)) / max(customers, 1),
             }
 
-            # Run all agents
             market_effect = 1.0
             new_funding = 0
             competitor_strength = 50
-            new_customers_this_month = 0
 
             for agent in agents:
                 result = agent.react(market_state, vars_)
                 if agent.type == "customer":
                     customers = result["total"]
-                    new_customers_this_month = result["new_customers"]
                 elif agent.type == "market":
                     market_effect = result["trend_multiplier"]
                     if result["recession"]:
-                        market_effect *= 0.7  # recession dampens growth
+                        market_effect *= 0.7
                 elif agent.type == "investor":
                     new_funding += result.get("funding", 0)
                 elif agent.type == "competitor":
@@ -194,12 +378,10 @@ class SimulationEngine:
             total_funding += new_funding
             budget += new_funding
 
-            # Revenue calculation
             prev_revenue = revenue
             revenue = customers * price * market_effect + random.gauss(0, customers * price * 0.1)
             revenue = max(0, revenue)
 
-            # Market share (simplified)
             total_market = vars_.get("market_size", 1_000_000)
             market_share = min(100, (customers / total_market) * 100)
 
@@ -212,17 +394,14 @@ class SimulationEngine:
                 "budget": round(budget, 2),
             })
 
-            # Check bankruptcy
             monthly_burn = vars_.get("budget", 50000) * 0.8
             budget -= monthly_burn
             if budget < 0:
-                break  # Out of runway
+                break
 
-        # Determine success (profitable or hitting milestones)
         final_revenue = timeline[-1]["revenue"] if timeline else 0
         final_month = len(timeline)
-        target_revenue = vars_.get("budget", 50000) * 2  # 2x MRR target
-
+        target_revenue = vars_.get("budget", 50000) * 2
         success = final_revenue >= target_revenue and final_month >= self.config.time_horizon * 0.75
 
         return {
@@ -232,6 +411,178 @@ class SimulationEngine:
             "final_market_share": timeline[-1]["market_share"] if timeline else 0,
             "months_survived": final_month,
             "timeline": timeline,
+        }
+
+    def _run_finance(self, vars_: Dict) -> Dict[str, Any]:
+        """Run a financial markets simulation."""
+        agents = self._create_agents()
+        portfolio_value = vars_.get("portfolio_value", 100000)
+        trading_days = int(vars_.get("trading_days", 252))
+        initial_value = portfolio_value
+        volatility = vars_.get("volatility", 20) / 100
+        num_assets = int(vars_.get("num_assets", 5))
+
+        timeline = []
+        prices = [100 + random.gauss(0, 10) for _ in range(num_assets)]
+        moving_avg = list(prices)
+
+        for day in range(1, trading_days + 1):
+            prev_prices = list(prices)
+            # Update prices with geometric brownian motion
+            for i in range(len(prices)):
+                drift = 0.0001  # slight positive drift
+                shock = random.gauss(drift, volatility / math.sqrt(252))
+                prices[i] *= (1 + shock)
+                moving_avg[i] = moving_avg[i] * 0.95 + prices[i] * 0.05
+
+            market_state = {
+                "step": day,
+                "price": sum(prices) / len(prices),
+                "prev_price": sum(prev_prices) / len(prev_prices),
+                "moving_avg": sum(moving_avg) / len(moving_avg),
+                "volume": random.randint(500, 5000),
+            }
+
+            total_pnl = 0
+            spread = 0.5
+            for agent in agents:
+                result = agent.react(market_state, vars_)
+                if agent.type == "trader":
+                    total_pnl += result.get("pnl", 0)
+                elif agent.type == "market_maker":
+                    spread = result.get("spread", 0.5)
+
+            portfolio_value = initial_value + total_pnl
+
+            if day % max(1, trading_days // self.config.time_horizon) == 0:
+                month = len(timeline) + 1
+                timeline.append({
+                    "month": month,
+                    "revenue": round(portfolio_value - initial_value, 2),
+                    "customers": int(sum(prices)),  # reusing field for price index
+                    "market_share": round((portfolio_value / initial_value - 1) * 100, 4),
+                    "competitor_strength": round(spread * 100, 1),
+                    "budget": round(portfolio_value, 2),
+                })
+
+        # Success = portfolio growth above threshold
+        growth = (portfolio_value - initial_value) / initial_value
+        risk_tolerance = vars_.get("risk_tolerance", 50) / 100
+        success = growth > risk_tolerance * 0.1  # 10% of risk tolerance as target
+
+        return {
+            "success": success,
+            "final_revenue": portfolio_value - initial_value,
+            "final_customers": int(sum(prices)),
+            "final_market_share": round(growth * 100, 4),
+            "months_survived": len(timeline),
+            "timeline": timeline if timeline else [{"month": 1, "revenue": 0, "customers": 0, "market_share": 0, "competitor_strength": 50, "budget": portfolio_value}],
+        }
+
+    def _run_biology(self, vars_: Dict) -> Dict[str, Any]:
+        """Run a molecular biology simulation."""
+        agents = self._create_agents()
+        num_molecules = int(vars_.get("num_molecules", 128))
+        sim_steps = int(vars_.get("sim_steps", 5000))
+
+        timeline = []
+        total_bound = 0
+        total_processed = 0
+
+        steps_per_period = max(1, sim_steps // self.config.time_horizon)
+
+        for step in range(1, sim_steps + 1):
+            market_state = {"step": step}
+            bound_count = 0
+            processed = 0
+
+            for agent in agents:
+                result = agent.react(market_state, vars_)
+                if agent.type == "molecule":
+                    if result.get("bound", False):
+                        bound_count += 1
+                elif agent.type == "enzyme":
+                    processed += result.get("processed", 0)
+
+            total_bound = bound_count
+            total_processed = processed
+
+            if step % steps_per_period == 0:
+                month = len(timeline) + 1
+                binding_rate = bound_count / max(num_molecules, 1)
+                timeline.append({
+                    "month": month,
+                    "revenue": round(binding_rate * 100, 2),  # reusing for binding %
+                    "customers": total_bound,  # reusing for bound molecules
+                    "market_share": round(binding_rate * 100, 4),
+                    "competitor_strength": round(total_processed, 1),
+                    "budget": round(total_processed, 2),
+                })
+
+        # Success = binding events above 50% threshold
+        final_binding_rate = total_bound / max(num_molecules, 1)
+        success = final_binding_rate > 0.4
+
+        return {
+            "success": success,
+            "final_revenue": round(final_binding_rate * 100, 2),
+            "final_customers": total_bound,
+            "final_market_share": round(final_binding_rate * 100, 4),
+            "months_survived": len(timeline),
+            "timeline": timeline if timeline else [{"month": 1, "revenue": 0, "customers": 0, "market_share": 0, "competitor_strength": 0, "budget": 0}],
+        }
+
+    def _run_trend(self, vars_: Dict) -> Dict[str, Any]:
+        """Run a trend analysis simulation."""
+        agents = self._create_agents()
+        forecast_periods = int(vars_.get("forecast_periods", 30))
+        confidence_level = vars_.get("confidence_level", 95) / 100
+
+        timeline = []
+        signals = []
+        patterns_detected = 0
+
+        for step in range(1, forecast_periods + 1):
+            market_state = {"step": step}
+            step_signal = 0
+            step_patterns = 0
+
+            for agent in agents:
+                result = agent.react(market_state, vars_)
+                if agent.type == "data_stream":
+                    step_signal += result.get("signal", 0)
+                    if result.get("pattern_detected", False):
+                        step_patterns += 1
+                elif agent.type == "market":
+                    market_mult = result.get("trend_multiplier", 1.0)
+                    step_signal *= market_mult
+
+            signals.append(step_signal)
+            patterns_detected += step_patterns
+
+            if step % max(1, forecast_periods // self.config.time_horizon) == 0 or step == forecast_periods:
+                month = len(timeline) + 1
+                accuracy = min(100, patterns_detected / max(step, 1) * 100 * 0.5 + 50)
+                timeline.append({
+                    "month": month,
+                    "revenue": round(sum(signals[-10:]) if len(signals) >= 10 else sum(signals), 4),
+                    "customers": patterns_detected,
+                    "market_share": round(accuracy, 4),
+                    "competitor_strength": round(np.std(signals[-20:]) if len(signals) >= 20 else 0, 4),
+                    "budget": round(accuracy, 2),
+                })
+
+        # Success = forecast accuracy above confidence level threshold
+        accuracy = patterns_detected / max(forecast_periods, 1)
+        success = accuracy > confidence_level * 0.5
+
+        return {
+            "success": success,
+            "final_revenue": round(accuracy * 100, 2),
+            "final_customers": patterns_detected,
+            "final_market_share": round(accuracy * 100, 4),
+            "months_survived": len(timeline),
+            "timeline": timeline if timeline else [{"month": 1, "revenue": 0, "customers": 0, "market_share": 0, "competitor_strength": 0, "budget": 0}],
         }
 
     async def run(self, num_runs: Optional[int] = None, variable_overrides: Optional[Dict] = None) -> SimulationResults:

@@ -1,6 +1,6 @@
 export type SimulationStatus = "draft" | "running" | "completed" | "failed";
-export type AgentType = "customer" | "competitor" | "regulator" | "investor" | "market";
-export type SimulationCategory = "startup" | "pricing" | "policy" | "marketing" | "product" | "custom";
+export type AgentType = "customer" | "competitor" | "regulator" | "investor" | "market" | "trader" | "market_maker" | "molecule" | "enzyme" | "data_stream";
+export type SimulationCategory = "startup" | "pricing" | "policy" | "marketing" | "product" | "finance" | "biology" | "trend" | "custom";
 
 export interface SimulationVariable {
   id: string;
@@ -34,6 +34,7 @@ export interface SimulationConfig {
   numRuns: number; // 100-10000
   timeHorizon: number; // months
   templateId?: string;
+  uploadedData?: Record<string, number[]>; // column name → values
 }
 
 export interface SimulationRun {

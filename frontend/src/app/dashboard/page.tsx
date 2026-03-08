@@ -71,7 +71,7 @@ export default function DashboardPage() {
   ];
 
   return (
-    <div className="p-8 max-w-6xl">
+    <div className="p-8">
       {/* Header */}
       <div className="flex items-start justify-between mb-10">
         <div>
@@ -140,7 +140,9 @@ export default function DashboardPage() {
             {[
               { label: "startup launch", href: "/simulations/new?template=startup" },
               { label: "pricing strategy", href: "/simulations/new?template=pricing" },
-              { label: "market entry", href: "/simulations/new?template=market-entry" },
+              { label: "stock market forecast", href: "/simulations/new?template=finance" },
+              { label: "molecular dynamics", href: "/simulations/new?template=biology" },
+              { label: "trend analyzer", href: "/simulations/new?template=trend" },
               { label: "custom simulation", href: "/simulations/new" },
             ].map((item) => (
               <Link
