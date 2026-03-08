@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+.next/
+out/
+dist/
+build/
+
+# Environment files - NEVER commit these
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.production.local
+
+# Firebase service account - NEVER commit
+backend/serviceAccountKey.json
+serviceAccountKey.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Testing
+coverage/
+.coverage
+
+# Misc
+.cache/
+.claude/
