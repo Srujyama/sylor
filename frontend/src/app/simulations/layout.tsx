@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { Sidebar } from "@/components/dashboard/Sidebar";
 
 export default function SimulationsLayout({ children }: { children: React.ReactNode }) {

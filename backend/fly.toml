@@ -1,4 +1,4 @@
-app = "simworld-api"
+app = "sylor-api"
 primary_region = "iad"
 
 [build]
