@@ -131,11 +131,21 @@ const config: Config = {
           "0%":   { backgroundPosition: "-200% 0" },
           "100%": { backgroundPosition: "200% 0" },
         },
+        "fade-in": {
+          "0%":   { opacity: "0", transform: "translateY(6px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        "slide-in-right": {
+          "0%":   { opacity: "0", transform: "translateX(12px)" },
+          "100%": { opacity: "1", transform: "translateX(0)" },
+        },
       },
       animation: {
         "accordion-down":  "accordion-down 0.2s ease-out",
         "accordion-up":    "accordion-up 0.2s ease-out",
         "fade-up":         "fade-up 0.35s ease forwards",
+        "fade-in":         "fade-in 0.3s ease forwards",
+        "slide-in-right":  "slide-in-right 0.3s ease forwards",
         blink:             "blink 1s step-end infinite",
         "pulse-subtle":    "pulse-subtle 2s ease-in-out infinite",
         shimmer:           "shimmer 2s linear infinite",

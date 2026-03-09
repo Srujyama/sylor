@@ -237,6 +237,103 @@
 }
 .fade-in { animation: fadeUp 0.35s ease forwards; }
 
+/* Progress bar */
+.progress-bar {
+  height: 4px;
+  background-color: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background-color: rgba(255, 255, 255, 0.35);
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Wizard step indicator */
+.step-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.step-dot {
+  width: 6px;
+  height: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  transition: all 0.3s ease;
+}
+.step-dot.active {
+  background: #ededed;
+  border-color: #ededed;
+}
+.step-dot.completed {
+  background: rgba(74, 222, 128, 0.5);
+  border-color: rgba(74, 222, 128, 0.5);
+}
+.step-connector {
+  width: 24px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  transition: background 0.3s ease;
+}
+.step-connector.completed {
+  background: rgba(74, 222, 128, 0.3);
+}
+
+/* Pulse animation for running indicators */
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.pulse-subtle {
+  animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+/* Stagger animation for lists */
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.stagger-item {
+  animation: slideUp 0.3s ease forwards;
+  opacity: 0;
+}
+.stagger-item:nth-child(1) { animation-delay: 0ms; }
+.stagger-item:nth-child(2) { animation-delay: 50ms; }
+.stagger-item:nth-child(3) { animation-delay: 100ms; }
+.stagger-item:nth-child(4) { animation-delay: 150ms; }
+.stagger-item:nth-child(5) { animation-delay: 200ms; }
+.stagger-item:nth-child(6) { animation-delay: 250ms; }
+.stagger-item:nth-child(7) { animation-delay: 300ms; }
+.stagger-item:nth-child(8) { animation-delay: 350ms; }
+.stagger-item:nth-child(9) { animation-delay: 400ms; }
+.stagger-item:nth-child(10) { animation-delay: 450ms; }
+
+/* Shimmer for loading states */
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.02) 25%,
+    rgba(255,255,255,0.06) 50%,
+    rgba(255,255,255,0.02) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+/* Number counter animation */
+@keyframes countUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.count-up {
+  animation: countUp 0.4s ease-out;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -251,4 +348,14 @@
 @keyframes accordion-up {
   from { height: var(--radix-accordion-content-height); }
   to   { height: 0; }
+}
+
+/* Toast animations */
+@keyframes slideInFromBottom {
+  from { opacity: 0; transform: translateY(100%); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideOutToRight {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(100%); }
 }

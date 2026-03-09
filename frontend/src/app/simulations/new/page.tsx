@@ -8,14 +8,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { SliderWithInput } from "@/components/ui/slider-with-input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import {
   Rocket, DollarSign, BarChart2, Megaphone, ShoppingCart, Building2,
   ArrowRight, ArrowLeft, Loader2, Zap, TrendingUp, FlaskConical, LineChart,
-  Upload, FileSpreadsheet, X, Table, Sparkles, Check, AlertCircle,
+  Upload, FileSpreadsheet, X, Table, Sparkles, Check, AlertCircle, HelpCircle,
 } from "lucide-react";
 import Link from "next/link";
-import { cn } from "@/lib/utils";
+import { cn, getApiUrl } from "@/lib/utils";
+import { useToast } from "@/components/ui/toast";
 import type { SimulationCategory, AIAnalysisResponse } from "@/types";
 
 // ---------- constants ----------
@@ -59,18 +63,13 @@ const riskProfileOptions = ["Conservative", "Moderate", "Aggressive", "Very aggr
 const marketConditionOptions = ["Bull market", "Bear market", "Sideways / range-bound", "Uncertain / volatile"];
 const dataFrequencyOptions = ["Hourly", "Daily", "Weekly", "Monthly", "Quarterly", "Yearly"];
 
-// ---------- helper: get API URL ----------
-
-function getApiUrl(): string {
-  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-}
-
 // ---------- component ----------
 
 export default function NewSimulationPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const templateId = searchParams.get("template");
+  const { toast } = useToast();
 
   const [step, setStep] = useState(1);
   const [category, setCategory] = useState<SimulationCategory>(
@@ -143,8 +142,10 @@ export default function NewSimulationPage() {
       setAgents(data.agents);
       setNumRuns(data.numRuns);
       setTimeHorizon(data.timeHorizon);
+      toast({ title: "Analysis complete", description: `Generated ${data.variables.length} variables and ${data.agents.length} agents`, variant: "success" });
     } catch (e: any) {
       setAnalysisError(e.message || "Failed to analyze context");
+      toast({ title: "Analysis failed", description: e.message || "Check your connection and try again", variant: "error" });
     } finally {
       setAnalyzing(false);
     }
@@ -231,9 +232,11 @@ export default function NewSimulationPage() {
         body: JSON.stringify({ num_runs: numRuns }),
       });
 
+      toast({ title: "Simulation launched", description: `Running ${numRuns.toLocaleString()} Monte Carlo iterations...`, variant: "success" });
       router.push(`/simulations/${sim.id}`);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Submit error:", err);
+      toast({ title: "Failed to launch simulation", description: err.message || "Check your connection", variant: "error" });
       setLoading(false);
     }
   }
@@ -253,26 +256,68 @@ export default function NewSimulationPage() {
     return true;
   })();
 
+  // ---------- helpers ----------
+
+  const FieldLabel = ({ label, tip, required }: { label: string; tip?: string; required?: boolean }) => (
+    <div className="flex items-center gap-1.5">
+      <Label className="text-xs text-white/50">{label}{required && " *"}</Label>
+      {tip && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <HelpCircle className="w-3 h-3 text-white/20 hover:text-white/40 transition-colors cursor-help" />
+          </TooltipTrigger>
+          <TooltipContent>{tip}</TooltipContent>
+        </Tooltip>
+      )}
+    </div>
+  );
+
   // ---------- render ----------
 
   return (
+    <TooltipProvider delayDuration={200}>
     <div className="p-8 max-w-5xl mx-auto">
       {/* Header */}
-      <div className="flex items-center gap-4 mb-8">
+      <div className="flex items-center gap-4 mb-6">
         <Button variant="ghost" size="icon" asChild>
           <Link href="/dashboard"><ArrowLeft className="w-4 h-4" /></Link>
         </Button>
-        <div>
-          <h1 className="text-2xl font-bold text-white">New Simulation</h1>
-          <p className="text-sm text-muted-foreground">Step {step} of {totalSteps}</p>
+        <div className="flex-1">
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl font-bold text-white">New Simulation</h1>
+            <span className="text-[10px] text-white/20 tracking-widest uppercase">
+              step {step} of {totalSteps}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Progress */}
-      <div className="flex gap-1 mb-8">
-        {Array.from({ length: totalSteps }).map((_, i) => (
-          <div key={i} className={cn("flex-1 h-1 transition-all", i < step ? "bg-white/60" : "bg-white/10")} />
-        ))}
+      {/* Step Progress with labels */}
+      <div className="mb-8">
+        <div className="flex gap-1 mb-2">
+          {Array.from({ length: totalSteps }).map((_, i) => (
+            <div
+              key={i}
+              className={cn(
+                "flex-1 h-0.5 transition-all duration-500",
+                i < step ? "bg-white/50" : i === step - 1 ? "bg-white/30" : "bg-white/[0.06]"
+              )}
+            />
+          ))}
+        </div>
+        <div className="flex justify-between">
+          {["scenario", "analysis", "variables", "data", "review"].map((label, i) => (
+            <span
+              key={label}
+              className={cn(
+                "text-[9px] tracking-widest uppercase transition-colors",
+                i < step ? "text-white/40" : i === step - 1 ? "text-white/60" : "text-white/10"
+              )}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
       </div>
 
       {/* ==================== STEP 1: Category + Company Context ==================== */}
@@ -327,27 +372,33 @@ export default function NewSimulationPage() {
                 </div>
                 <div>
                   <Label className="text-xs text-white/50">Industry *</Label>
-                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none focus:border-white/20" value={context.industry || ""} onChange={(e) => updateContext("industry", e.target.value)}>
-                    <option value="">Select industry</option>
-                    {industryOptions.map((o) => <option key={o} value={o}>{o}</option>)}
-                  </select>
+                  <Select value={context.industry || ""} onValueChange={(v) => updateContext("industry", v)}>
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select industry" /></SelectTrigger>
+                    <SelectContent>
+                      {industryOptions.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label className="text-xs text-white/50">Business Model</Label>
-                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none focus:border-white/20" value={context.businessModel || ""} onChange={(e) => updateContext("businessModel", e.target.value)}>
-                    <option value="">Select model</option>
-                    {businessModelOptions.map((o) => <option key={o} value={o}>{o}</option>)}
-                  </select>
+                  <Select value={context.businessModel || ""} onValueChange={(v) => updateContext("businessModel", v)}>
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select model" /></SelectTrigger>
+                    <SelectContent>
+                      {businessModelOptions.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label className="text-xs text-white/50">Stage</Label>
-                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none focus:border-white/20" value={context.stage || ""} onChange={(e) => updateContext("stage", e.target.value)}>
-                    <option value="">Select stage</option>
-                    {stageOptions.map((o) => <option key={o} value={o}>{o}</option>)}
-                  </select>
+                  <Select value={context.stage || ""} onValueChange={(v) => updateContext("stage", v)}>
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select stage" /></SelectTrigger>
+                    <SelectContent>
+                      {stageOptions.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
@@ -355,15 +406,15 @@ export default function NewSimulationPage() {
 
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <Label className="text-xs text-white/50">Current MRR</Label>
+                  <FieldLabel label="Current MRR" tip="Monthly Recurring Revenue — your predictable monthly income from subscriptions or contracts." />
                   <Input className="mt-1" placeholder="$0" value={context.currentMrr || ""} onChange={(e) => updateContext("currentMrr", e.target.value)} />
                 </div>
                 <div>
-                  <Label className="text-xs text-white/50">Monthly Burn Rate</Label>
+                  <FieldLabel label="Monthly Burn Rate" tip="Total monthly cash outflow including salaries, rent, tools, and other operating costs." />
                   <Input className="mt-1" placeholder="$25,000" value={context.monthlyBurn || ""} onChange={(e) => updateContext("monthlyBurn", e.target.value)} />
                 </div>
                 <div>
-                  <Label className="text-xs text-white/50">Runway (months)</Label>
+                  <FieldLabel label="Runway" tip="How many months of cash you have left at the current burn rate before running out." />
                   <Input className="mt-1" placeholder="18" value={context.runwayMonths || ""} onChange={(e) => updateContext("runwayMonths", e.target.value)} />
                 </div>
               </div>
@@ -374,7 +425,7 @@ export default function NewSimulationPage() {
                   <Input className="mt-1" placeholder="5" value={context.teamSize || ""} onChange={(e) => updateContext("teamSize", e.target.value)} />
                 </div>
                 <div>
-                  <Label className="text-xs text-white/50">Total Funding Raised</Label>
+                  <FieldLabel label="Total Funding Raised" tip="Total capital raised from investors (seed, Series A, etc.) — helps AI calibrate growth expectations." />
                   <Input className="mt-1" placeholder="$500K" value={context.fundingRaised || ""} onChange={(e) => updateContext("fundingRaised", e.target.value)} />
                 </div>
                 <div>
@@ -387,7 +438,7 @@ export default function NewSimulationPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <Label className="text-xs text-white/50">Target Market Size (TAM)</Label>
+                  <FieldLabel label="Target Market Size (TAM)" tip="Total Addressable Market — the total revenue opportunity available if you captured 100% of the market." />
                   <Input className="mt-1" placeholder="$2B" value={context.targetMarketSize || ""} onChange={(e) => updateContext("targetMarketSize", e.target.value)} />
                 </div>
                 <div>
@@ -453,10 +504,12 @@ export default function NewSimulationPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label className="text-xs text-white/50">Investment Type *</Label>
-                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none" value={context.investmentType || ""} onChange={(e) => updateContext("investmentType", e.target.value)}>
-                    <option value="">Select type</option>
-                    {["Stocks / Equities", "Crypto", "Forex", "Commodities", "Mixed portfolio", "Options / Derivatives"].map((o) => <option key={o} value={o}>{o}</option>)}
-                  </select>
+                  <Select value={context.investmentType || ""} onValueChange={(v) => updateContext("investmentType", v)}>
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select type" /></SelectTrigger>
+                    <SelectContent>
+                      {["Stocks / Equities", "Crypto", "Forex", "Commodities", "Mixed portfolio", "Options / Derivatives"].map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label className="text-xs text-white/50">Starting Capital *</Label>
@@ -469,11 +522,13 @@ export default function NewSimulationPage() {
                   <Input className="mt-1" placeholder="12 months" value={context.investmentHorizon || ""} onChange={(e) => updateContext("investmentHorizon", e.target.value)} />
                 </div>
                 <div>
-                  <Label className="text-xs text-white/50">Risk Profile</Label>
-                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none" value={context.riskProfile || ""} onChange={(e) => updateContext("riskProfile", e.target.value)}>
-                    <option value="">Select profile</option>
-                    {riskProfileOptions.map((o) => <option key={o} value={o}>{o}</option>)}
-                  </select>
+                  <FieldLabel label="Risk Profile" tip="Your tolerance for volatility — conservative means lower risk/reward, aggressive means higher." />
+                  <Select value={context.riskProfile || ""} onValueChange={(v) => updateContext("riskProfile", v)}>
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select profile" /></SelectTrigger>
+                    <SelectContent>
+                      {riskProfileOptions.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
               <div>
@@ -487,13 +542,15 @@ export default function NewSimulationPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label className="text-xs text-white/50">Market Conditions</Label>
-                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none" value={context.marketCondition || ""} onChange={(e) => updateContext("marketCondition", e.target.value)}>
-                    <option value="">Select condition</option>
-                    {marketConditionOptions.map((o) => <option key={o} value={o}>{o}</option>)}
-                  </select>
+                  <Select value={context.marketCondition || ""} onValueChange={(v) => updateContext("marketCondition", v)}>
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select condition" /></SelectTrigger>
+                    <SelectContent>
+                      {marketConditionOptions.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
-                  <Label className="text-xs text-white/50">Income Requirements</Label>
+                  <FieldLabel label="Income Requirements" tip="Monthly income you need the portfolio to generate (e.g., for living expenses)." />
                   <Input className="mt-1" placeholder="$0 / month" value={context.incomeRequirements || ""} onChange={(e) => updateContext("incomeRequirements", e.target.value)} />
                 </div>
               </div>
@@ -507,10 +564,12 @@ export default function NewSimulationPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label className="text-xs text-white/50">Research Goal *</Label>
-                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none" value={context.researchGoal || ""} onChange={(e) => updateContext("researchGoal", e.target.value)}>
-                    <option value="">Select goal</option>
-                    {["Drug binding simulation", "Protein folding dynamics", "Enzyme kinetics", "Molecular interaction screening", "Conformational analysis", "Other"].map((o) => <option key={o} value={o}>{o}</option>)}
-                  </select>
+                  <Select value={context.researchGoal || ""} onValueChange={(v) => updateContext("researchGoal", v)}>
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select goal" /></SelectTrigger>
+                    <SelectContent>
+                      {["Drug binding simulation", "Protein folding dynamics", "Enzyme kinetics", "Molecular interaction screening", "Conformational analysis", "Other"].map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label className="text-xs text-white/50">Target Molecule / Protein *</Label>
@@ -518,7 +577,7 @@ export default function NewSimulationPage() {
                 </div>
               </div>
               <div>
-                <Label className="text-xs text-white/50">Known Binding Partners / Ligands</Label>
+                <FieldLabel label="Known Binding Partners / Ligands" tip="Molecules known to interact with your target — helps calibrate binding affinity parameters." />
                 <Input className="mt-1" placeholder="e.g., gefitinib, erlotinib" value={context.bindingPartners || ""} onChange={(e) => updateContext("bindingPartners", e.target.value)} />
               </div>
               <div className="grid grid-cols-3 gap-4">
@@ -540,7 +599,7 @@ export default function NewSimulationPage() {
                 <textarea className="mt-1 w-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/20 resize-none h-16" placeholder="Describe any IC50, Kd, or kinetic data you have" value={context.experimentalData || ""} onChange={(e) => updateContext("experimentalData", e.target.value)} />
               </div>
               <div>
-                <Label className="text-xs text-white/50">Desired Outcome</Label>
+                <FieldLabel label="Desired Outcome" tip="The success criteria for your simulation — e.g., binding affinity threshold, reaction rate target." />
                 <Input className="mt-1" placeholder="e.g., Binding affinity < 10 nM" value={context.desiredOutcome || ""} onChange={(e) => updateContext("desiredOutcome", e.target.value)} />
               </div>
             </div>
@@ -553,10 +612,12 @@ export default function NewSimulationPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label className="text-xs text-white/50">Data Domain *</Label>
-                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none" value={context.dataDomain || ""} onChange={(e) => updateContext("dataDomain", e.target.value)}>
-                    <option value="">Select domain</option>
-                    {["Sales / revenue", "Web traffic / analytics", "Stock prices", "Sensor / IoT data", "Economic indicators", "Social media metrics", "Scientific measurements", "Other"].map((o) => <option key={o} value={o}>{o}</option>)}
-                  </select>
+                  <Select value={context.dataDomain || ""} onValueChange={(v) => updateContext("dataDomain", v)}>
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select domain" /></SelectTrigger>
+                    <SelectContent>
+                      {["Sales / revenue", "Web traffic / analytics", "Stock prices", "Sensor / IoT data", "Economic indicators", "Social media metrics", "Scientific measurements", "Other"].map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label className="text-xs text-white/50">Forecast Horizon *</Label>
@@ -570,10 +631,12 @@ export default function NewSimulationPage() {
                 </div>
                 <div>
                   <Label className="text-xs text-white/50">Data Frequency</Label>
-                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none" value={context.dataFrequency || ""} onChange={(e) => updateContext("dataFrequency", e.target.value)}>
-                    <option value="">Select frequency</option>
-                    {dataFrequencyOptions.map((o) => <option key={o} value={o}>{o}</option>)}
-                  </select>
+                  <Select value={context.dataFrequency || ""} onValueChange={(v) => updateContext("dataFrequency", v)}>
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select frequency" /></SelectTrigger>
+                    <SelectContent>
+                      {dataFrequencyOptions.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
               <div>
@@ -741,30 +804,20 @@ export default function NewSimulationPage() {
           <div className="space-y-4">
             {variables.map((variable, idx) => (
               <div key={variable.name} className="surface p-4">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs text-white/70 font-medium">{variable.label}</span>
-                  <span className="text-sm font-semibold text-white font-mono">
-                    {variable.unit === "$" ? `$${variable.value.toLocaleString()}` :
-                     variable.unit ? `${variable.value}${["%" , "x", "K", "pH", "nM", "µM", "bps"].includes(variable.unit) ? "" : " "}${variable.unit}` :
-                     variable.value}
-                  </span>
-                </div>
-                <div className="text-[10px] text-white/20 mb-3">{variable.reasoning}</div>
-                <Slider
+                <SliderWithInput
+                  label={variable.label}
+                  sublabel={variable.reasoning}
                   min={variable.min}
                   max={variable.max}
-                  step={variable.max > 10000 ? Math.max(1, Math.round((variable.max - variable.min) / 200)) : variable.max > 100 ? 1 : 0.1}
-                  value={[variable.value]}
-                  onValueChange={([val]) => {
+                  value={variable.value}
+                  onChange={(val) => {
                     const updated = [...variables];
                     updated[idx] = { ...updated[idx], value: val };
                     setVariables(updated);
                   }}
+                  unit={variable.unit}
+                  unitPosition={variable.unit === "$" ? "prefix" : "suffix"}
                 />
-                <div className="flex justify-between text-[10px] text-white/15 mt-1">
-                  <span>{variable.unit === "$" ? `$${variable.min.toLocaleString()}` : `${variable.min}${variable.unit}`}</span>
-                  <span>{variable.unit === "$" ? `$${variable.max.toLocaleString()}` : `${variable.max}${variable.unit}`}</span>
-                </div>
               </div>
             ))}
           </div>
@@ -839,17 +892,13 @@ export default function NewSimulationPage() {
             <Card>
               <CardHeader><CardTitle className="text-sm">Number of Runs</CardTitle></CardHeader>
               <CardContent>
-                <div className="text-3xl font-bold text-white mb-3">{numRuns.toLocaleString()}</div>
-                <Slider min={100} max={10000} step={100} value={[numRuns]} onValueChange={([v]) => setNumRuns(v)} />
-                <div className="flex justify-between text-[10px] text-white/20 mt-1"><span>100</span><span>10,000</span></div>
+                <SliderWithInput min={100} max={10000} step={100} value={numRuns} onChange={setNumRuns} unit="runs" unitPosition="suffix" />
               </CardContent>
             </Card>
             <Card>
               <CardHeader><CardTitle className="text-sm">Time Horizon</CardTitle></CardHeader>
               <CardContent>
-                <div className="text-3xl font-bold text-white/70 mb-3">{timeHorizon} {isBiology ? "periods" : "months"}</div>
-                <Slider min={1} max={60} step={1} value={[timeHorizon]} onValueChange={([v]) => setTimeHorizon(v)} />
-                <div className="flex justify-between text-[10px] text-white/20 mt-1"><span>1</span><span>60</span></div>
+                <SliderWithInput min={1} max={60} step={1} value={timeHorizon} onChange={setTimeHorizon} unit={isBiology ? "periods" : "months"} unitPosition="suffix" />
               </CardContent>
             </Card>
           </div>
@@ -908,5 +957,6 @@ export default function NewSimulationPage() {
         </div>
       )}
     </div>
+    </TooltipProvider>
   );
 }

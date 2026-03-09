@@ -24,3 +24,19 @@ export function sleep(ms: number) {
 export function generateId() {
   return Math.random().toString(36).slice(2, 11);
 }
+
+export function getApiUrl(): string {
+  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+}
+
+export function formatCurrency(value: number): string {
+  if (Math.abs(value) >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(value) >= 1_000) return `$${(value / 1_000).toFixed(0)}k`;
+  return `$${value.toFixed(0)}`;
+}
+
+export function formatNumber(value: number): string {
+  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return value.toLocaleString();
+}

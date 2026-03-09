@@ -86,6 +86,14 @@ class RiskFactor(BaseModel):
     mitigation: str
 
 
+class DomainMetadata(BaseModel):
+    primary_metric_label: str
+    primary_metric_unit: str
+    secondary_metric_label: str
+    tertiary_metric_label: str
+    time_unit: str
+
+
 class SimulationResults(BaseModel):
     success_probability: float
     confidence_interval: tuple[float, float]
@@ -99,6 +107,7 @@ class SimulationResults(BaseModel):
     competitor_reactions: List[str]
     success_explanation: str
     failure_explanation: str
+    domain_metadata: Optional[DomainMetadata] = None
 
 
 class SimulationCreate(BaseModel):

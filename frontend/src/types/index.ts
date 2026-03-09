@@ -126,6 +126,14 @@ export interface User {
   simulationCount: number;
 }
 
+export interface DomainMetadata {
+  primary_metric_label: string;
+  primary_metric_unit: string;
+  secondary_metric_label: string;
+  tertiary_metric_label: string;
+  time_unit: string;
+}
+
 // --- Company Context for AI-powered simulation setup ---
 
 export interface BusinessContext {
