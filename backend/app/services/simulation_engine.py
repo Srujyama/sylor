@@ -337,17 +337,33 @@ class SimulationEngine:
         else:
             return self._run_business(vars_)
 
+    def _find_var(self, vars_: Dict, *keys: str, default: float = 0) -> float:
+        """Find a variable by trying multiple possible names (AI may name things differently)."""
+        for key in keys:
+            if key in vars_:
+                return float(vars_[key])
+            # Try partial match
+            for vk in vars_:
+                if key in vk or vk in key:
+                    return float(vars_[vk])
+        return default
+
     def _run_business(self, vars_: Dict) -> Dict[str, Any]:
-        """Run a business/startup simulation."""
+        """Run a business/startup simulation. Works with AI-generated variable names."""
         agents = self._create_agents()
-        budget = vars_.get("budget", 50000)
-        price = vars_.get("price_per_unit", 99)
+
+        # Flexibly find key variables — AI may name them differently
+        budget = self._find_var(vars_, "budget", "monthly_budget", "monthly_burn", "burn_rate", "monthly_burn_rate", default=50000)
+        price = self._find_var(vars_, "price_per_unit", "price", "current_price", "price_point", "monthly_price", "subscription_price", default=99)
+        market_size = self._find_var(vars_, "market_size", "target_market_size", "tam", "total_addressable_market", "addressable_market", default=1_000_000)
+        initial_customers = int(self._find_var(vars_, "current_customers", "customer_count", "existing_customers", "customer_base", default=0))
+        current_mrr = self._find_var(vars_, "current_mrr", "mrr", "monthly_revenue", "current_revenue", default=0)
 
         timeline = []
-        revenue = 0
-        customers = 0
+        revenue = current_mrr
+        customers = initial_customers
         total_funding = 0
-        prev_revenue = 0
+        prev_revenue = revenue
 
         for month in range(1, self.config.time_horizon + 1):
             market_state = {
@@ -355,7 +371,7 @@ class SimulationEngine:
                 "revenue": revenue,
                 "total_customers": customers,
                 "revenue_growth": (revenue - prev_revenue) / max(prev_revenue, 1),
-                "month_growth": (customers - (timeline[-1]["customers"] if timeline else 0)) / max(customers, 1),
+                "month_growth": (customers - (timeline[-1]["customers"] if timeline else initial_customers)) / max(customers, 1),
             }
 
             market_effect = 1.0
@@ -379,11 +395,10 @@ class SimulationEngine:
             budget += new_funding
 
             prev_revenue = revenue
-            revenue = customers * price * market_effect + random.gauss(0, customers * price * 0.1)
+            revenue = customers * price * market_effect + random.gauss(0, max(customers * price * 0.1, 1))
             revenue = max(0, revenue)
 
-            total_market = vars_.get("market_size", 1_000_000)
-            market_share = min(100, (customers / total_market) * 100)
+            market_share = min(100, (customers / max(market_size, 1)) * 100)
 
             timeline.append({
                 "month": month,
@@ -394,14 +409,15 @@ class SimulationEngine:
                 "budget": round(budget, 2),
             })
 
-            monthly_burn = vars_.get("budget", 50000) * 0.8
+            monthly_burn = budget * 0.8
             budget -= monthly_burn
             if budget < 0:
                 break
 
         final_revenue = timeline[-1]["revenue"] if timeline else 0
         final_month = len(timeline)
-        target_revenue = vars_.get("budget", 50000) * 2
+        # Success = survived full period and revenue exceeds burn
+        target_revenue = self._find_var(vars_, "budget", "monthly_burn", default=50000) * 1.5
         success = final_revenue >= target_revenue and final_month >= self.config.time_horizon * 0.75
 
         return {
@@ -416,11 +432,11 @@ class SimulationEngine:
     def _run_finance(self, vars_: Dict) -> Dict[str, Any]:
         """Run a financial markets simulation."""
         agents = self._create_agents()
-        portfolio_value = vars_.get("portfolio_value", 100000)
-        trading_days = int(vars_.get("trading_days", 252))
+        portfolio_value = self._find_var(vars_, "portfolio_value", "starting_capital", "initial_capital", "capital", default=100000)
+        trading_days = int(self._find_var(vars_, "trading_days", "simulation_days", default=252))
         initial_value = portfolio_value
-        volatility = vars_.get("volatility", 20) / 100
-        num_assets = int(vars_.get("num_assets", 5))
+        volatility = self._find_var(vars_, "volatility", "expected_volatility", "annual_volatility", default=20) / 100
+        num_assets = int(self._find_var(vars_, "num_assets", "number_of_assets", "asset_count", default=5))
 
         timeline = []
         prices = [100 + random.gauss(0, 10) for _ in range(num_assets)]
@@ -466,9 +482,9 @@ class SimulationEngine:
                 })
 
         # Success = portfolio growth above threshold
-        growth = (portfolio_value - initial_value) / initial_value
-        risk_tolerance = vars_.get("risk_tolerance", 50) / 100
-        success = growth > risk_tolerance * 0.1  # 10% of risk tolerance as target
+        growth = (portfolio_value - initial_value) / max(initial_value, 1)
+        risk_tolerance = self._find_var(vars_, "risk_tolerance", "target_return", default=50) / 100
+        success = growth > risk_tolerance * 0.1
 
         return {
             "success": success,
@@ -482,8 +498,8 @@ class SimulationEngine:
     def _run_biology(self, vars_: Dict) -> Dict[str, Any]:
         """Run a molecular biology simulation."""
         agents = self._create_agents()
-        num_molecules = int(vars_.get("num_molecules", 128))
-        sim_steps = int(vars_.get("sim_steps", 5000))
+        num_molecules = int(self._find_var(vars_, "num_molecules", "molecule_count", "number_of_molecules", default=128))
+        sim_steps = int(self._find_var(vars_, "sim_steps", "simulation_steps", "total_steps", default=5000))
 
         timeline = []
         total_bound = 0
@@ -535,8 +551,8 @@ class SimulationEngine:
     def _run_trend(self, vars_: Dict) -> Dict[str, Any]:
         """Run a trend analysis simulation."""
         agents = self._create_agents()
-        forecast_periods = int(vars_.get("forecast_periods", 30))
-        confidence_level = vars_.get("confidence_level", 95) / 100
+        forecast_periods = int(self._find_var(vars_, "forecast_periods", "forecast_horizon", "prediction_periods", default=30))
+        confidence_level = self._find_var(vars_, "confidence_level", "confidence_threshold", default=95) / 100
 
         timeline = []
         signals = []

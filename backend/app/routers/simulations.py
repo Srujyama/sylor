@@ -91,7 +91,7 @@ async def _execute_simulation(
 
         # Enhance with AI insights
         try:
-            ai_data = await generate_ai_insights(config, results)
+            ai_data = await generate_ai_insights(config, results, company_context=config.company_context)
             results.key_insights = ai_data.get("key_insights", results.key_insights)
             results.success_explanation = ai_data.get("success_pattern", results.success_explanation)
             results.failure_explanation = ai_data.get("failure_pattern", results.failure_explanation)

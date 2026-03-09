@@ -2,13 +2,27 @@
 AI-powered insights generation using Claude API.
 """
 import anthropic
+from typing import Optional, Dict, Any
 from app.config import settings
 from app.models.simulation import SimulationConfig, SimulationResults
+
+
+def _format_company_context(context: Dict[str, Any]) -> str:
+    """Format company context dict into readable lines for the prompt."""
+    if not context:
+        return ""
+    lines = []
+    for k, v in context.items():
+        if v and str(v).strip():
+            label = k.replace("_", " ").replace("camelCase", " ").title()
+            lines.append(f"- {label}: {v}")
+    return "\n".join(lines)
 
 
 async def generate_ai_insights(
     config: SimulationConfig,
     results: SimulationResults,
+    company_context: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """Generate rich AI insights from simulation results using Claude."""
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -39,12 +53,24 @@ async def generate_ai_insights(
         metric_label = "average revenue at end"
         metric_value = f"${results.avg_revenue:,.0f}/month"
 
+    # Build company context block if available
+    context_block = ""
+    if company_context:
+        context_lines = _format_company_context(company_context)
+        if context_lines:
+            context_block = f"""
+COMPANY/SCENARIO CONTEXT (real data provided by the user):
+{context_lines}
+
+IMPORTANT: Reference the user's actual company, competitors, market, and metrics in your insights. Make recommendations specific to THEIR situation, not generic advice."""
+
     prompt = f"""{role}
 
 SIMULATION: {config.name}
 CATEGORY: {config.category.value}
 TIME HORIZON: {config.time_horizon} {"steps" if category == "biology" else "months"}
 RUNS: {config.num_runs}
+{context_block}
 
 VARIABLES:
 {variables_summary}
@@ -60,11 +86,11 @@ RESULTS:
 - Average break-even / convergence: month {results.avg_breakeven_month:.1f}
 
 Provide a structured analysis with:
-1. 5 specific, actionable key insights based on the data
+1. 5 specific, actionable key insights based on the data{" and the user's company context" if company_context else ""}
 2. The primary success pattern in 2-3 sentences
 3. The primary failure pattern in 2-3 sentences
-4. 3 strategic recommendations with expected impact
-5. One "contrarian insight" — something surprising or counter-intuitive
+4. 3 strategic recommendations with expected impact{" — reference their actual company, competitors, and market" if company_context else ""}
+5. One "contrarian insight" — something surprising or counter-intuitive from the simulation
 
 Format as JSON:
 {{

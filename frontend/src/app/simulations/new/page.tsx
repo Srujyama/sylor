@@ -8,144 +8,64 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Rocket, DollarSign, BarChart2, Megaphone, ShoppingCart, Building2,
   ArrowRight, ArrowLeft, Loader2, Zap, TrendingUp, FlaskConical, LineChart,
-  Upload, FileSpreadsheet, X, Table,
+  Upload, FileSpreadsheet, X, Table, Sparkles, Check, AlertCircle,
 } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import type { SimulationCategory } from "@/types";
+import type { SimulationCategory, AIAnalysisResponse } from "@/types";
+
+// ---------- constants ----------
 
 const categories = [
-  { id: "startup", label: "Startup Launch", icon: Rocket, color: "violet" },
-  { id: "pricing", label: "Pricing Strategy", icon: DollarSign, color: "green" },
-  { id: "policy", label: "Policy Impact", icon: BarChart2, color: "cyan" },
-  { id: "marketing", label: "Marketing", icon: Megaphone, color: "yellow" },
-  { id: "product", label: "Product Launch", icon: ShoppingCart, color: "pink" },
-  { id: "finance", label: "Financial Markets", icon: TrendingUp, color: "emerald" },
-  { id: "biology", label: "Molecular / Bio", icon: FlaskConical, color: "teal" },
-  { id: "trend", label: "Trend Analysis", icon: LineChart, color: "sky" },
-  { id: "custom", label: "Custom", icon: Building2, color: "orange" },
+  { id: "startup", label: "Startup Launch", icon: Rocket },
+  { id: "pricing", label: "Pricing Strategy", icon: DollarSign },
+  { id: "policy", label: "Policy Impact", icon: BarChart2 },
+  { id: "marketing", label: "Marketing", icon: Megaphone },
+  { id: "product", label: "Product Launch", icon: ShoppingCart },
+  { id: "finance", label: "Financial Markets", icon: TrendingUp },
+  { id: "biology", label: "Molecular / Bio", icon: FlaskConical },
+  { id: "trend", label: "Trend Analysis", icon: LineChart },
+  { id: "custom", label: "Custom", icon: Building2 },
 ] as const;
 
-const colorMap: Record<string, string> = {
-  violet: "border-violet-500/50 bg-violet-500/10 text-violet-400",
-  green: "border-green-500/50 bg-green-500/10 text-green-400",
-  cyan: "border-cyan-500/50 bg-cyan-500/10 text-cyan-400",
-  yellow: "border-yellow-500/50 bg-yellow-500/10 text-yellow-400",
-  pink: "border-pink-500/50 bg-pink-500/10 text-pink-400",
-  orange: "border-orange-500/50 bg-orange-500/10 text-orange-400",
-  emerald: "border-emerald-500/50 bg-emerald-500/10 text-emerald-400",
-  teal: "border-teal-500/50 bg-teal-500/10 text-teal-400",
-  sky: "border-sky-500/50 bg-sky-500/10 text-sky-400",
-};
+const industryOptions = [
+  "SaaS / Software", "E-commerce", "Fintech", "Healthcare / Biotech",
+  "EdTech", "Consumer Apps", "Marketplace", "Hardware / IoT",
+  "Media / Content", "Real Estate", "Logistics", "Energy / CleanTech", "Other",
+];
 
-const defaultVariablesByCategory: Record<string, Array<{ name: string; label: string; value: number; min: number; max: number; unit: string }>> = {
-  startup: [
-    { name: "budget", label: "Monthly Budget", value: 50000, min: 5000, max: 1000000, unit: "$" },
-    { name: "team_size", label: "Team Size", value: 5, min: 1, max: 100, unit: "people" },
-    { name: "price_per_unit", label: "Price per Unit", value: 99, min: 1, max: 10000, unit: "$" },
-    { name: "market_size", label: "Total Addressable Market", value: 1000000, min: 10000, max: 100000000, unit: "users" },
-    { name: "conversion_rate", label: "Conversion Rate", value: 5, min: 0.1, max: 50, unit: "%" },
-    { name: "churn_rate", label: "Monthly Churn", value: 5, min: 0.5, max: 30, unit: "%" },
-  ],
-  pricing: [
-    { name: "current_price", label: "Current Price", value: 49, min: 1, max: 10000, unit: "$" },
-    { name: "test_price", label: "Test Price", value: 79, min: 1, max: 10000, unit: "$" },
-    { name: "customer_base", label: "Customer Base", value: 1000, min: 100, max: 1000000, unit: "users" },
-    { name: "price_elasticity", label: "Price Elasticity", value: 1.5, min: 0.1, max: 5, unit: "x" },
-  ],
-  marketing: [
-    { name: "budget", label: "Campaign Budget", value: 20000, min: 1000, max: 1000000, unit: "$" },
-    { name: "cac_target", label: "Target CAC", value: 50, min: 5, max: 1000, unit: "$" },
-    { name: "audience_size", label: "Target Audience", value: 100000, min: 1000, max: 100000000, unit: "people" },
-    { name: "brand_awareness", label: "Current Brand Awareness", value: 10, min: 0, max: 100, unit: "%" },
-  ],
-  policy: [
-    { name: "population", label: "Population Affected", value: 500000, min: 1000, max: 100000000, unit: "people" },
-    { name: "compliance_rate", label: "Expected Compliance", value: 70, min: 10, max: 100, unit: "%" },
-    { name: "enforcement_budget", label: "Enforcement Budget", value: 1000000, min: 10000, max: 100000000, unit: "$" },
-    { name: "timeline", label: "Implementation Timeline", value: 24, min: 1, max: 120, unit: "months" },
-  ],
-  product: [
-    { name: "launch_users", label: "Launch Users", value: 1000, min: 100, max: 1000000, unit: "users" },
-    { name: "feature_count", label: "Features at Launch", value: 5, min: 1, max: 50, unit: "features" },
-    { name: "virality_coeff", label: "Virality Coefficient", value: 1.2, min: 0.1, max: 5, unit: "x" },
-    { name: "retention_30d", label: "30-Day Retention", value: 40, min: 5, max: 90, unit: "%" },
-  ],
-  finance: [
-    { name: "portfolio_value", label: "Portfolio Value", value: 100000, min: 1000, max: 100000000, unit: "$" },
-    { name: "trading_days", label: "Trading Days", value: 252, min: 20, max: 756, unit: "days" },
-    { name: "risk_tolerance", label: "Risk Tolerance", value: 50, min: 1, max: 100, unit: "%" },
-    { name: "volatility", label: "Expected Volatility", value: 20, min: 1, max: 100, unit: "%" },
-    { name: "num_assets", label: "Number of Assets", value: 5, min: 1, max: 50, unit: "assets" },
-    { name: "rebalance_freq", label: "Rebalance Frequency", value: 30, min: 1, max: 252, unit: "days" },
-  ],
-  biology: [
-    { name: "num_molecules", label: "Number of Molecules", value: 128, min: 10, max: 10000, unit: "molecules" },
-    { name: "temperature", label: "Temperature", value: 310, min: 250, max: 400, unit: "K" },
-    { name: "ph_level", label: "pH Level", value: 7.4, min: 0, max: 14, unit: "pH" },
-    { name: "concentration", label: "Concentration", value: 100, min: 1, max: 10000, unit: "µM" },
-    { name: "binding_affinity", label: "Binding Affinity (Kd)", value: 10, min: 0.01, max: 1000, unit: "nM" },
-    { name: "sim_steps", label: "Simulation Steps", value: 5000, min: 100, max: 100000, unit: "steps" },
-  ],
-  trend: [
-    { name: "forecast_periods", label: "Forecast Periods", value: 30, min: 5, max: 365, unit: "periods" },
-    { name: "confidence_level", label: "Confidence Level", value: 95, min: 50, max: 99, unit: "%" },
-    { name: "seasonality_period", label: "Seasonality Period", value: 12, min: 1, max: 365, unit: "periods" },
-    { name: "trend_strength", label: "Trend Strength", value: 50, min: 1, max: 100, unit: "%" },
-    { name: "noise_level", label: "Noise Level", value: 15, min: 1, max: 100, unit: "%" },
-  ],
-  custom: [
-    { name: "param_1", label: "Parameter 1", value: 50, min: 0, max: 100, unit: "" },
-    { name: "param_2", label: "Parameter 2", value: 50, min: 0, max: 100, unit: "" },
-    { name: "param_3", label: "Parameter 3", value: 50, min: 0, max: 100, unit: "" },
-  ],
-};
+const businessModelOptions = [
+  "SaaS (subscription)", "Marketplace (take rate)", "E-commerce (direct sales)",
+  "Freemium", "Usage-based pricing", "Enterprise licenses",
+  "Advertising", "Hardware + software", "Services / consulting", "Other",
+];
 
-// Domain-specific agents
-const agentsByDomain: Record<string, Array<{ type: string; label: string; icon: string; defaultCount: number; description: string }>> = {
-  business: [
-    { type: "customer", label: "Customers", icon: "👤", defaultCount: 500, description: "End users who may purchase your product" },
-    { type: "competitor", label: "Competitors", icon: "⚔️", defaultCount: 3, description: "Existing market players reacting to your moves" },
-    { type: "investor", label: "Investors", icon: "💼", defaultCount: 10, description: "Funding sources evaluating your progress" },
-    { type: "regulator", label: "Regulators", icon: "⚖️", defaultCount: 1, description: "Government or industry regulatory bodies" },
-    { type: "market", label: "Market Forces", icon: "📈", defaultCount: 1, description: "Macro-economic and industry trends" },
-  ],
-  finance: [
-    { type: "trader", label: "Traders", icon: "📊", defaultCount: 24, description: "AI traders with momentum/mean-reversion strategies" },
-    { type: "market_maker", label: "Market Makers", icon: "🏛️", defaultCount: 4, description: "Liquidity providers adjusting bid/ask spreads" },
-    { type: "data_stream", label: "Data Streams", icon: "📡", defaultCount: 6, description: "Real-time price feeds and market signals" },
-    { type: "investor", label: "Investors", icon: "💼", defaultCount: 10, description: "Institutional and retail investors" },
-  ],
-  biology: [
-    { type: "molecule", label: "Molecules", icon: "🧬", defaultCount: 128, description: "Simulated molecules with binding and folding behavior" },
-    { type: "enzyme", label: "Enzymes", icon: "⚗️", defaultCount: 8, description: "Catalytic agents affecting reaction rates" },
-    { type: "data_stream", label: "Data Streams", icon: "📡", defaultCount: 4, description: "Environmental condition feeds (temperature, pH)" },
-  ],
-  trend: [
-    { type: "data_stream", label: "Data Streams", icon: "📡", defaultCount: 6, description: "Time-series data feeds for trend detection" },
-    { type: "market", label: "Market Forces", icon: "📈", defaultCount: 3, description: "External forces influencing trends" },
-    { type: "customer", label: "Customers", icon: "👤", defaultCount: 100, description: "Behavioral data points and demand signals" },
-  ],
-};
+const stageOptions = [
+  "Idea / pre-product", "Pre-revenue (has product)", "Early revenue (<$10K MRR)",
+  "Growing ($10K-$100K MRR)", "Scaling ($100K-$1M MRR)", "Established ($1M+ MRR)",
+];
 
-function getDomainForCategory(cat: string): string {
-  if (["finance"].includes(cat)) return "finance";
-  if (["biology"].includes(cat)) return "biology";
-  if (["trend"].includes(cat)) return "trend";
-  return "business";
+const channelOptions = [
+  "Paid ads (Google/Meta)", "Organic / SEO", "Content marketing",
+  "Referral / word-of-mouth", "Outbound sales", "Partnerships / affiliates",
+  "Social media", "Events / conferences",
+];
+
+const riskProfileOptions = ["Conservative", "Moderate", "Aggressive", "Very aggressive"];
+const marketConditionOptions = ["Bull market", "Bear market", "Sideways / range-bound", "Uncertain / volatile"];
+const dataFrequencyOptions = ["Hourly", "Daily", "Weekly", "Monthly", "Quarterly", "Yearly"];
+
+// ---------- helper: get API URL ----------
+
+function getApiUrl(): string {
+  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 }
 
-interface UploadedData {
-  fileName: string;
-  fileSize: string;
-  rowCount: number;
-  columns: Array<{ name: string; type: string; sample: string }>;
-}
+// ---------- component ----------
 
 export default function NewSimulationPage() {
   const router = useRouter();
@@ -153,55 +73,85 @@ export default function NewSimulationPage() {
   const templateId = searchParams.get("template");
 
   const [step, setStep] = useState(1);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
   const [category, setCategory] = useState<SimulationCategory>(
     (templateId as SimulationCategory) || "startup"
   );
-  const [variables, setVariables] = useState(
-    defaultVariablesByCategory[templateId || "startup"] || defaultVariablesByCategory.startup
-  );
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
 
-  const domain = getDomainForCategory(category);
-  const currentAgentTemplates = agentsByDomain[domain] || agentsByDomain.business;
+  // Company context — flexible object, fields depend on category
+  const [context, setContext] = useState<Record<string, any>>({});
+  const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
 
-  const [selectedAgents, setSelectedAgents] = useState([
-    { type: "customer", count: 500, sensitivity: 0.7 },
-    { type: "competitor", count: 3, sensitivity: 0.8 },
-  ]);
+  // AI analysis result
+  const [analysis, setAnalysis] = useState<AIAnalysisResponse | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState("");
+
+  // Editable variables (populated by AI, user can tweak)
+  const [variables, setVariables] = useState<AIAnalysisResponse["variables"]>([]);
+  const [agents, setAgents] = useState<AIAnalysisResponse["agents"]>([]);
   const [numRuns, setNumRuns] = useState(1000);
   const [timeHorizon, setTimeHorizon] = useState(12);
-  const [loading, setLoading] = useState(false);
-  const [uploadedData, setUploadedData] = useState<UploadedData | null>(null);
+
+  // Data upload
+  const [uploadedData, setUploadedData] = useState<{ fileName: string; fileSize: string; rowCount: number; columns: Array<{ name: string; type: string; sample: string }> } | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
-  const totalSteps = 4;
+  const [loading, setLoading] = useState(false);
 
-  function handleCategorySelect(cat: SimulationCategory) {
-    setCategory(cat);
-    setVariables(defaultVariablesByCategory[cat] || defaultVariablesByCategory.startup);
-    // Reset agents to defaults for the new domain
-    const newDomain = getDomainForCategory(cat);
-    const newAgents = agentsByDomain[newDomain] || agentsByDomain.business;
-    setSelectedAgents(
-      newAgents.slice(0, 2).map((a) => ({ type: a.type, count: a.defaultCount, sensitivity: 0.7 }))
+  const totalSteps = 5;
+
+  // ---------- context field helpers ----------
+
+  function updateContext(key: string, value: any) {
+    setContext((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function toggleChannel(ch: string) {
+    setSelectedChannels((prev) =>
+      prev.includes(ch) ? prev.filter((c) => c !== ch) : [...prev, ch]
     );
   }
 
-  function toggleAgent(type: string, defaultCount: number) {
-    const exists = selectedAgents.find((a) => a.type === type);
-    if (exists) {
-      setSelectedAgents(selectedAgents.filter((a) => a.type !== type));
-    } else {
-      setSelectedAgents([...selectedAgents, { type, count: defaultCount, sensitivity: 0.7 }]);
+  // ---------- AI analysis ----------
+
+  async function runAnalysis() {
+    setAnalyzing(true);
+    setAnalysisError("");
+
+    const fullContext = {
+      ...context,
+      acquisitionChannels: selectedChannels,
+    };
+
+    try {
+      const res = await fetch(`${getApiUrl()}/api/context/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category, context: fullContext }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Server error ${res.status}`);
+      }
+
+      const data: AIAnalysisResponse = await res.json();
+      setAnalysis(data);
+      setVariables(data.variables);
+      setAgents(data.agents);
+      setNumRuns(data.numRuns);
+      setTimeHorizon(data.timeHorizon);
+    } catch (e: any) {
+      setAnalysisError(e.message || "Failed to analyze context");
+    } finally {
+      setAnalyzing(false);
     }
   }
 
-  function updateAgentCount(type: string, count: number) {
-    setSelectedAgents(selectedAgents.map((a) => a.type === type ? { ...a, count } : a));
-  }
+  // ---------- file upload ----------
 
-  // File upload handling
   const handleFileDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
@@ -215,15 +165,11 @@ export default function NewSimulationPage() {
   }, []);
 
   function processFile(file: File) {
-    // Client-side mock parsing — in production this would use xlsx/papaparse
     const ext = file.name.split(".").pop()?.toLowerCase();
     if (!["csv", "xlsx", "xls"].includes(ext || "")) return;
-
     const sizeStr = file.size < 1024 * 1024
       ? `${(file.size / 1024).toFixed(1)} KB`
       : `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
-
-    // Simulate parsed data — in production would actually parse
     setUploadedData({
       fileName: file.name,
       fileSize: sizeStr,
@@ -237,12 +183,77 @@ export default function NewSimulationPage() {
     });
   }
 
+  // ---------- submit ----------
+
   async function handleSubmit() {
     setLoading(true);
-    // In production: POST to /api/simulations
-    await new Promise((r) => setTimeout(r, 1500));
-    router.push("/simulations/demo-id");
+    try {
+      const config = {
+        name: name || `${category} simulation`,
+        description,
+        category,
+        variables: variables.map((v, i) => ({
+          id: `var-${i}`,
+          name: v.name,
+          label: v.label,
+          type: "number" as const,
+          value: v.value,
+          min: v.min,
+          max: v.max,
+          unit: v.unit,
+        })),
+        agents: agents.map((a, i) => ({
+          id: `agent-${i}`,
+          type: a.type,
+          name: a.label,
+          count: a.count,
+          sensitivity: a.sensitivity,
+          behavior_rules: [],
+        })),
+        num_runs: numRuns,
+        time_horizon: timeHorizon,
+        company_context: { ...context, acquisitionChannels: selectedChannels },
+      };
+
+      const res = await fetch(`${getApiUrl()}/api/simulations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config, user_id: "demo-user" }),
+      });
+
+      if (!res.ok) throw new Error("Failed to create simulation");
+      const sim = await res.json();
+
+      // Auto-run the simulation
+      await fetch(`${getApiUrl()}/api/simulations/${sim.id}/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ num_runs: numRuns }),
+      });
+
+      router.push(`/simulations/${sim.id}`);
+    } catch (err) {
+      console.error("Submit error:", err);
+      setLoading(false);
+    }
   }
+
+  // ---------- domain helpers ----------
+
+  const isBusiness = ["startup", "pricing", "policy", "marketing", "product", "custom"].includes(category);
+  const isFinance = category === "finance";
+  const isBiology = category === "biology";
+  const isTrend = category === "trend";
+
+  const hasMinContext = (() => {
+    if (isBusiness) return !!(context.companyName && context.industry);
+    if (isFinance) return !!(context.investmentType && context.startingCapital);
+    if (isBiology) return !!(context.researchGoal && context.targetMolecule);
+    if (isTrend) return !!(context.dataDomain && context.forecastHorizon);
+    return true;
+  })();
+
+  // ---------- render ----------
 
   return (
     <div className="p-8 max-w-5xl mx-auto">
@@ -258,338 +269,632 @@ export default function NewSimulationPage() {
       </div>
 
       {/* Progress */}
-      <div className="flex gap-2 mb-8">
+      <div className="flex gap-1 mb-8">
         {Array.from({ length: totalSteps }).map((_, i) => (
-          <div
-            key={i}
-            className={cn(
-              "flex-1 h-1.5 transition-all duration-500",
-              i < step ? "bg-white/60" : "bg-white/10"
-            )}
-          />
+          <div key={i} className={cn("flex-1 h-1 transition-all", i < step ? "bg-white/60" : "bg-white/10")} />
         ))}
       </div>
 
-      {/* Step 1: Category */}
+      {/* ==================== STEP 1: Category + Company Context ==================== */}
       {step === 1 && (
         <div className="animate-fade-in">
-          <h2 className="text-xl font-semibold text-white mb-2">What are you simulating?</h2>
-          <p className="text-muted-foreground mb-6">Choose a category to get started with a pre-configured setup</p>
+          <h2 className="text-xl font-semibold text-white mb-1">Tell us about your scenario</h2>
+          <p className="text-xs text-white/35 mb-6">The more detail you provide, the more accurate your simulation will be.</p>
 
+          {/* Category picker */}
           <div className="grid grid-cols-3 gap-px bg-white/[0.05] mb-8">
             {categories.map((cat) => (
               <button
                 key={cat.id}
-                onClick={() => handleCategorySelect(cat.id as SimulationCategory)}
+                onClick={() => { setCategory(cat.id as SimulationCategory); setContext({}); setSelectedChannels([]); setAnalysis(null); }}
                 className={cn(
-                  "p-5 text-left transition-all bg-[#0a0a0a] hover:bg-white/[0.03]",
-                  category === cat.id
-                    ? "bg-white/[0.05] border-l-2 border-l-white/40"
-                    : ""
+                  "p-4 text-left transition-all bg-[#0a0a0a] hover:bg-white/[0.03]",
+                  category === cat.id ? "bg-white/[0.05] border-l-2 border-l-white/40" : ""
                 )}
               >
-                <cat.icon className={cn("w-5 h-5 mb-3", category === cat.id ? "text-white" : "text-white/30")} />
-                <div className={cn("text-sm font-medium", category === cat.id ? "text-white" : "text-white/50")}>{cat.label}</div>
+                <cat.icon className={cn("w-4 h-4 mb-2", category === cat.id ? "text-white" : "text-white/25")} />
+                <div className={cn("text-xs font-medium", category === cat.id ? "text-white" : "text-white/40")}>{cat.label}</div>
               </button>
             ))}
           </div>
 
-          <div className="space-y-4">
+          {/* Simulation name */}
+          <div className="space-y-4 mb-6">
             <div>
-              <Label>Simulation Name</Label>
-              <Input
-                className="mt-1.5"
-                placeholder={`e.g., ${
-                  category === "startup" ? "SaaS B2B Launch Q1 2026" :
-                  category === "finance" ? "Tech Portfolio Risk Analysis" :
-                  category === "biology" ? "Protein Binding Simulation" :
-                  category === "trend" ? "Q2 Sales Trend Forecast" :
-                  "My Simulation"
-                }`}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
+              <Label className="text-xs text-white/50">Simulation Name</Label>
+              <Input className="mt-1" placeholder="e.g., Q2 Launch Scenario" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
             <div>
-              <Label>Description (optional)</Label>
+              <Label className="text-xs text-white/50">What are you trying to figure out? (optional)</Label>
               <textarea
-                className="mt-1.5 w-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-white/25 resize-none h-20"
-                placeholder="What decision are you trying to validate?"
+                className="mt-1 w-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/20 resize-none h-16"
+                placeholder="e.g., Should we raise prices 20% or expand into EU first?"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
               />
             </div>
           </div>
 
+          {/* ---- BUSINESS CONTEXT FORM ---- */}
+          {isBusiness && (
+            <div className="space-y-4">
+              <div className="text-xs text-white/20 tracking-widest uppercase mb-2">company details</div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs text-white/50">Company Name *</Label>
+                  <Input className="mt-1" placeholder="Acme Inc." value={context.companyName || ""} onChange={(e) => updateContext("companyName", e.target.value)} />
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Industry *</Label>
+                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none focus:border-white/20" value={context.industry || ""} onChange={(e) => updateContext("industry", e.target.value)}>
+                    <option value="">Select industry</option>
+                    {industryOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs text-white/50">Business Model</Label>
+                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none focus:border-white/20" value={context.businessModel || ""} onChange={(e) => updateContext("businessModel", e.target.value)}>
+                    <option value="">Select model</option>
+                    {businessModelOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Stage</Label>
+                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none focus:border-white/20" value={context.stage || ""} onChange={(e) => updateContext("stage", e.target.value)}>
+                    <option value="">Select stage</option>
+                    {stageOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="text-xs text-white/20 tracking-widest uppercase mt-6 mb-2">financials</div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <Label className="text-xs text-white/50">Current MRR</Label>
+                  <Input className="mt-1" placeholder="$0" value={context.currentMrr || ""} onChange={(e) => updateContext("currentMrr", e.target.value)} />
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Monthly Burn Rate</Label>
+                  <Input className="mt-1" placeholder="$25,000" value={context.monthlyBurn || ""} onChange={(e) => updateContext("monthlyBurn", e.target.value)} />
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Runway (months)</Label>
+                  <Input className="mt-1" placeholder="18" value={context.runwayMonths || ""} onChange={(e) => updateContext("runwayMonths", e.target.value)} />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <Label className="text-xs text-white/50">Team Size</Label>
+                  <Input className="mt-1" placeholder="5" value={context.teamSize || ""} onChange={(e) => updateContext("teamSize", e.target.value)} />
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Total Funding Raised</Label>
+                  <Input className="mt-1" placeholder="$500K" value={context.fundingRaised || ""} onChange={(e) => updateContext("fundingRaised", e.target.value)} />
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Current Customers</Label>
+                  <Input className="mt-1" placeholder="150" value={context.customerCount || ""} onChange={(e) => updateContext("customerCount", e.target.value)} />
+                </div>
+              </div>
+
+              <div className="text-xs text-white/20 tracking-widest uppercase mt-6 mb-2">market & competition</div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs text-white/50">Target Market Size (TAM)</Label>
+                  <Input className="mt-1" placeholder="$2B" value={context.targetMarketSize || ""} onChange={(e) => updateContext("targetMarketSize", e.target.value)} />
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Geographic Market</Label>
+                  <Input className="mt-1" placeholder="US, Europe" value={context.geoMarket || ""} onChange={(e) => updateContext("geoMarket", e.target.value)} />
+                </div>
+              </div>
+
+              <div>
+                <Label className="text-xs text-white/50">Top Competitors (comma-separated)</Label>
+                <Input className="mt-1" placeholder="Competitor A, Competitor B, Competitor C" value={context.competitors || ""} onChange={(e) => updateContext("competitors", e.target.value)} />
+              </div>
+
+              <div>
+                <Label className="text-xs text-white/50">Key Differentiator</Label>
+                <textarea
+                  className="mt-1 w-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/20 resize-none h-16"
+                  placeholder="What makes your product different from competitors?"
+                  value={context.differentiator || ""}
+                  onChange={(e) => updateContext("differentiator", e.target.value)}
+                />
+              </div>
+
+              <div className="text-xs text-white/20 tracking-widest uppercase mt-6 mb-2">pricing & growth</div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs text-white/50">Pricing Model</Label>
+                  <Input className="mt-1" placeholder="$49/mo subscription" value={context.pricingModel || ""} onChange={(e) => updateContext("pricingModel", e.target.value)} />
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Current Price Point</Label>
+                  <Input className="mt-1" placeholder="$49/mo" value={context.currentPrice || ""} onChange={(e) => updateContext("currentPrice", e.target.value)} />
+                </div>
+              </div>
+
+              <div>
+                <Label className="text-xs text-white/50">Acquisition Channels</Label>
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {channelOptions.map((ch) => (
+                    <button
+                      key={ch}
+                      onClick={() => toggleChannel(ch)}
+                      className={cn(
+                        "px-2.5 py-1 text-[11px] border transition-colors",
+                        selectedChannels.includes(ch)
+                          ? "border-white/30 bg-white/10 text-white"
+                          : "border-white/10 text-white/30 hover:border-white/20"
+                      )}
+                    >
+                      {ch}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ---- FINANCE CONTEXT FORM ---- */}
+          {isFinance && (
+            <div className="space-y-4">
+              <div className="text-xs text-white/20 tracking-widest uppercase mb-2">investment details</div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs text-white/50">Investment Type *</Label>
+                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none" value={context.investmentType || ""} onChange={(e) => updateContext("investmentType", e.target.value)}>
+                    <option value="">Select type</option>
+                    {["Stocks / Equities", "Crypto", "Forex", "Commodities", "Mixed portfolio", "Options / Derivatives"].map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Starting Capital *</Label>
+                  <Input className="mt-1" placeholder="$100,000" value={context.startingCapital || ""} onChange={(e) => updateContext("startingCapital", e.target.value)} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs text-white/50">Investment Horizon</Label>
+                  <Input className="mt-1" placeholder="12 months" value={context.investmentHorizon || ""} onChange={(e) => updateContext("investmentHorizon", e.target.value)} />
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Risk Profile</Label>
+                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none" value={context.riskProfile || ""} onChange={(e) => updateContext("riskProfile", e.target.value)}>
+                    <option value="">Select profile</option>
+                    {riskProfileOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs text-white/50">Target Assets / Tickers</Label>
+                <Input className="mt-1" placeholder="AAPL, TSLA, BTC, ETH" value={context.targetAssets || ""} onChange={(e) => updateContext("targetAssets", e.target.value)} />
+              </div>
+              <div>
+                <Label className="text-xs text-white/50">Current Portfolio (describe what you hold)</Label>
+                <textarea className="mt-1 w-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/20 resize-none h-16" placeholder="60% S&P 500 index, 20% tech stocks, 10% bonds, 10% crypto" value={context.portfolioComposition || ""} onChange={(e) => updateContext("portfolioComposition", e.target.value)} />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs text-white/50">Market Conditions</Label>
+                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none" value={context.marketCondition || ""} onChange={(e) => updateContext("marketCondition", e.target.value)}>
+                    <option value="">Select condition</option>
+                    {marketConditionOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Income Requirements</Label>
+                  <Input className="mt-1" placeholder="$0 / month" value={context.incomeRequirements || ""} onChange={(e) => updateContext("incomeRequirements", e.target.value)} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ---- BIOLOGY CONTEXT FORM ---- */}
+          {isBiology && (
+            <div className="space-y-4">
+              <div className="text-xs text-white/20 tracking-widest uppercase mb-2">research details</div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs text-white/50">Research Goal *</Label>
+                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none" value={context.researchGoal || ""} onChange={(e) => updateContext("researchGoal", e.target.value)}>
+                    <option value="">Select goal</option>
+                    {["Drug binding simulation", "Protein folding dynamics", "Enzyme kinetics", "Molecular interaction screening", "Conformational analysis", "Other"].map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Target Molecule / Protein *</Label>
+                  <Input className="mt-1" placeholder="e.g., EGFR, insulin, aspirin" value={context.targetMolecule || ""} onChange={(e) => updateContext("targetMolecule", e.target.value)} />
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs text-white/50">Known Binding Partners / Ligands</Label>
+                <Input className="mt-1" placeholder="e.g., gefitinib, erlotinib" value={context.bindingPartners || ""} onChange={(e) => updateContext("bindingPartners", e.target.value)} />
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <Label className="text-xs text-white/50">Temperature Range</Label>
+                  <Input className="mt-1" placeholder="298-310 K" value={context.temperatureRange || ""} onChange={(e) => updateContext("temperatureRange", e.target.value)} />
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">pH Range</Label>
+                  <Input className="mt-1" placeholder="6.5-8.0" value={context.phRange || ""} onChange={(e) => updateContext("phRange", e.target.value)} />
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Solvent</Label>
+                  <Input className="mt-1" placeholder="Water, PBS buffer" value={context.solvent || ""} onChange={(e) => updateContext("solvent", e.target.value)} />
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs text-white/50">Existing Experimental Data</Label>
+                <textarea className="mt-1 w-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/20 resize-none h-16" placeholder="Describe any IC50, Kd, or kinetic data you have" value={context.experimentalData || ""} onChange={(e) => updateContext("experimentalData", e.target.value)} />
+              </div>
+              <div>
+                <Label className="text-xs text-white/50">Desired Outcome</Label>
+                <Input className="mt-1" placeholder="e.g., Binding affinity < 10 nM" value={context.desiredOutcome || ""} onChange={(e) => updateContext("desiredOutcome", e.target.value)} />
+              </div>
+            </div>
+          )}
+
+          {/* ---- TREND CONTEXT FORM ---- */}
+          {isTrend && (
+            <div className="space-y-4">
+              <div className="text-xs text-white/20 tracking-widest uppercase mb-2">data & forecast details</div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs text-white/50">Data Domain *</Label>
+                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none" value={context.dataDomain || ""} onChange={(e) => updateContext("dataDomain", e.target.value)}>
+                    <option value="">Select domain</option>
+                    {["Sales / revenue", "Web traffic / analytics", "Stock prices", "Sensor / IoT data", "Economic indicators", "Social media metrics", "Scientific measurements", "Other"].map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Forecast Horizon *</Label>
+                  <Input className="mt-1" placeholder="30 days, 6 months, etc." value={context.forecastHorizon || ""} onChange={(e) => updateContext("forecastHorizon", e.target.value)} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs text-white/50">Historical Data Period</Label>
+                  <Input className="mt-1" placeholder="2 years of daily data" value={context.historicalPeriod || ""} onChange={(e) => updateContext("historicalPeriod", e.target.value)} />
+                </div>
+                <div>
+                  <Label className="text-xs text-white/50">Data Frequency</Label>
+                  <select className="mt-1 w-full border border-white/10 bg-[#0a0a0a] px-3 py-2 text-sm text-white focus:outline-none" value={context.dataFrequency || ""} onChange={(e) => updateContext("dataFrequency", e.target.value)}>
+                    <option value="">Select frequency</option>
+                    {dataFrequencyOptions.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs text-white/50">Known Seasonal Patterns</Label>
+                <Input className="mt-1" placeholder="e.g., spikes in Q4, dips in summer" value={context.seasonalPatterns || ""} onChange={(e) => updateContext("seasonalPatterns", e.target.value)} />
+              </div>
+              <div>
+                <Label className="text-xs text-white/50">External Factors to Consider</Label>
+                <textarea className="mt-1 w-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/20 resize-none h-16" placeholder="e.g., competitor launches, marketing campaigns, regulatory changes" value={context.externalFactors || ""} onChange={(e) => updateContext("externalFactors", e.target.value)} />
+              </div>
+            </div>
+          )}
+
           <div className="flex justify-end mt-8">
-            <Button variant="gradient" onClick={() => setStep(2)} disabled={!name.trim()}>
-              Continue <ArrowRight className="w-4 h-4" />
+            <Button variant="gradient" onClick={() => { setStep(2); runAnalysis(); }} disabled={!name.trim() || !hasMinContext}>
+              Analyze with AI <Sparkles className="w-4 h-4" />
             </Button>
           </div>
         </div>
       )}
 
-      {/* Step 2: Variables + Data Upload */}
+      {/* ==================== STEP 2: AI Analysis ==================== */}
       {step === 2 && (
         <div className="animate-fade-in">
-          <h2 className="text-xl font-semibold text-white mb-2">Configure Variables</h2>
-          <p className="text-muted-foreground mb-6">Set the key inputs for your simulation. These drive all agent behavior.</p>
+          <h2 className="text-xl font-semibold text-white mb-1">AI Analysis</h2>
+          <p className="text-xs text-white/35 mb-8">Claude is analyzing your scenario and generating a realistic simulation configuration.</p>
 
-          {/* Data Upload Section */}
-          <div className="surface mb-6">
-            <div className="px-5 py-3 border-b border-white/[0.06]">
-              <div className="flex items-center gap-2">
-                <Upload className="w-3.5 h-3.5 text-white/30" />
-                <span className="text-xs text-white/25 tracking-widest uppercase">upload data (optional)</span>
+          {analyzing && (
+            <div className="surface p-12 flex flex-col items-center justify-center text-center">
+              <Loader2 className="w-8 h-8 text-white/30 animate-spin mb-4" />
+              <p className="text-sm text-white/50 mb-1">Analyzing your scenario...</p>
+              <p className="text-xs text-white/25">Building simulation variables from your company data</p>
+            </div>
+          )}
+
+          {analysisError && (
+            <div className="surface p-8">
+              <div className="flex items-start gap-3 mb-4">
+                <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm text-white mb-1">Analysis failed</p>
+                  <p className="text-xs text-white/40">{analysisError}</p>
+                </div>
               </div>
+              <Button variant="ghost" onClick={() => { runAnalysis(); }}>
+                <Loader2 className="w-3 h-3 mr-1" /> Retry
+              </Button>
+            </div>
+          )}
+
+          {analysis && !analyzing && (
+            <div className="space-y-6">
+              {/* Generated variables preview */}
+              <div className="surface">
+                <div className="px-5 py-3 border-b border-white/[0.06] flex items-center gap-2">
+                  <Sparkles className="w-3.5 h-3.5 text-white/30" />
+                  <span className="text-xs text-white/25 tracking-widest uppercase">generated variables</span>
+                  <span className="text-[10px] text-white/15 ml-auto">{analysis.variables.length} variables</span>
+                </div>
+                <div className="divide-y divide-white/[0.04]">
+                  {analysis.variables.map((v) => (
+                    <div key={v.name} className="px-5 py-3 flex items-center gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs text-white/70 font-medium">{v.label}</div>
+                        <div className="text-[10px] text-white/25 truncate">{v.reasoning}</div>
+                      </div>
+                      <div className="text-sm text-white font-mono shrink-0">
+                        {v.unit === "$" ? `$${v.value.toLocaleString()}` : `${v.value}${v.unit}`}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Generated agents preview */}
+              <div className="surface">
+                <div className="px-5 py-3 border-b border-white/[0.06] flex items-center gap-2">
+                  <span className="text-xs text-white/25 tracking-widest uppercase">agents</span>
+                  <span className="text-[10px] text-white/15 ml-auto">{analysis.agents.length} agent types</span>
+                </div>
+                <div className="divide-y divide-white/[0.04]">
+                  {analysis.agents.map((a) => (
+                    <div key={a.type} className="px-5 py-3 flex items-center gap-4">
+                      <div className="flex-1">
+                        <div className="text-xs text-white/70 font-medium">{a.label}</div>
+                        <div className="text-[10px] text-white/25">{a.reasoning}</div>
+                      </div>
+                      <span className="tag text-[10px]">{a.count} agents</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Assumptions */}
+              <div className="surface">
+                <div className="px-5 py-3 border-b border-white/[0.06]">
+                  <span className="text-xs text-white/25 tracking-widest uppercase">key assumptions</span>
+                </div>
+                <div className="px-5 py-3 space-y-1.5">
+                  {analysis.assumptions.map((a, i) => (
+                    <div key={i} className="flex items-start gap-2 text-xs text-white/40">
+                      <div className="w-1 h-1 bg-white/20 shrink-0 mt-1.5" />
+                      <span>{a}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Success criteria */}
+              <div className="surface px-5 py-3">
+                <div className="text-[10px] text-white/20 tracking-widest uppercase mb-1">success criteria</div>
+                <p className="text-xs text-white/50">{analysis.successCriteria}</p>
+              </div>
+
+              <div className="flex justify-between mt-8">
+                <Button variant="ghost" onClick={() => setStep(1)}>
+                  <ArrowLeft className="w-4 h-4" /> Edit Context
+                </Button>
+                <Button variant="gradient" onClick={() => setStep(3)}>
+                  Looks Good — Fine-Tune <ArrowRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ==================== STEP 3: Fine-Tune Variables ==================== */}
+      {step === 3 && (
+        <div className="animate-fade-in">
+          <h2 className="text-xl font-semibold text-white mb-1">Fine-Tune Variables</h2>
+          <p className="text-xs text-white/35 mb-6">AI-generated values pre-filled from your context. Adjust anything that doesn't look right.</p>
+
+          {/* Data upload (optional) */}
+          <div className="surface mb-6">
+            <div className="px-5 py-3 border-b border-white/[0.06] flex items-center gap-2">
+              <Upload className="w-3.5 h-3.5 text-white/30" />
+              <span className="text-xs text-white/25 tracking-widest uppercase">upload data (optional)</span>
             </div>
             <div className="p-5">
               {!uploadedData ? (
                 <div
-                  className={cn(
-                    "border border-dashed p-6 flex flex-col items-center justify-center text-center transition-colors cursor-pointer",
-                    dragOver ? "border-white/40 bg-white/[0.04]" : "border-white/[0.15] hover:border-white/[0.25]"
-                  )}
+                  className={cn("border border-dashed p-5 flex flex-col items-center justify-center text-center transition-colors cursor-pointer", dragOver ? "border-white/40 bg-white/[0.04]" : "border-white/[0.15] hover:border-white/[0.25]")}
                   onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                   onDragLeave={() => setDragOver(false)}
                   onDrop={handleFileDrop}
                   onClick={() => document.getElementById("file-input")?.click()}
                 >
-                  <Upload className="w-5 h-5 text-white/20 mb-2" />
-                  <p className="text-xs text-white/40 mb-1">drop CSV or Excel file here, or click to browse</p>
-                  <p className="text-[10px] text-white/20">CSV, XLSX, XLS — max 10MB</p>
-                  <input
-                    id="file-input"
-                    type="file"
-                    accept=".csv,.xlsx,.xls"
-                    className="hidden"
-                    onChange={handleFileSelect}
-                  />
+                  <Upload className="w-4 h-4 text-white/20 mb-1.5" />
+                  <p className="text-[11px] text-white/35">Drop CSV or Excel to override variables with real data</p>
+                  <input id="file-input" type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleFileSelect} />
                 </div>
               ) : (
-                <div>
-                  {/* File info */}
-                  <div className="flex items-center gap-3 mb-4">
-                    <FileSpreadsheet className="w-4 h-4 text-white/30" />
-                    <div className="flex-1">
-                      <span className="text-xs text-white/60">{uploadedData.fileName}</span>
-                      <span className="text-[10px] text-white/20 ml-2">{uploadedData.fileSize} · {uploadedData.rowCount} rows</span>
-                    </div>
-                    <span className="text-[10px] text-emerald-400/70">✓ parsed</span>
-                    <button
-                      onClick={() => setUploadedData(null)}
-                      className="text-white/20 hover:text-white/50 transition-colors"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-
-                  {/* Column preview */}
-                  <div className="surface">
-                    <div className="px-3 py-1.5 border-b border-white/[0.06] flex items-center gap-2">
-                      <Table className="w-3 h-3 text-white/20" />
-                      <span className="text-[10px] text-white/20 tracking-widest uppercase">{uploadedData.columns.length} columns detected</span>
-                    </div>
-                    <div className="divide-y divide-white/[0.04]">
-                      {uploadedData.columns.map((col) => (
-                        <div key={col.name} className="grid grid-cols-4 px-3 py-2">
-                          <span className="text-xs text-white/60 font-mono">{col.name}</span>
-                          <span className="tag text-[10px] w-fit">{col.type}</span>
-                          <span className="text-xs text-white/30 font-mono">{col.sample}</span>
-                          <span className="text-[10px] text-white/25">→ map to var</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                <div className="flex items-center gap-3">
+                  <FileSpreadsheet className="w-4 h-4 text-white/30" />
+                  <span className="text-xs text-white/60">{uploadedData.fileName}</span>
+                  <span className="text-[10px] text-emerald-400/70">✓ parsed</span>
+                  <button onClick={() => setUploadedData(null)} className="ml-auto text-white/20 hover:text-white/50"><X className="w-3.5 h-3.5" /></button>
                 </div>
               )}
             </div>
           </div>
 
           {/* Variable sliders */}
-          <div className="space-y-6">
-            {variables.map((variable, idx) => (
-              <Card key={variable.name}>
-                <CardContent className="p-5">
-                  <div className="flex items-center justify-between mb-3">
-                    <Label className="text-sm text-white">{variable.label}</Label>
-                    <span className="text-sm font-semibold text-white/70">
-                      {variable.unit === "$" ? `$${variable.value.toLocaleString()}` :
-                       variable.unit ? `${variable.value}${variable.unit === "%" || variable.unit === "x" || variable.unit === "K" || variable.unit === "pH" || variable.unit === "nM" || variable.unit === "µM" ? "" : " "}${variable.unit}` :
-                       variable.value}
-                    </span>
-                  </div>
-                  <Slider
-                    min={variable.min}
-                    max={variable.max}
-                    step={variable.max > 10000 ? 1000 : variable.max > 100 ? 10 : variable.max > 14 ? 1 : 0.1}
-                    value={[variable.value]}
-                    onValueChange={([val]) => {
-                      const updated = [...variables];
-                      updated[idx] = { ...updated[idx], value: val };
-                      setVariables(updated);
-                    }}
-                  />
-                  <div className="flex justify-between text-xs text-muted-foreground mt-1.5">
-                    <span>{variable.unit === "$" ? `$${variable.min.toLocaleString()}` : `${variable.min}${variable.unit}`}</span>
-                    <span>{variable.unit === "$" ? `$${variable.max.toLocaleString()}` : `${variable.max}${variable.unit}`}</span>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-
-          <div className="flex justify-between mt-8">
-            <Button variant="ghost" onClick={() => setStep(1)}>
-              <ArrowLeft className="w-4 h-4" /> Back
-            </Button>
-            <Button variant="gradient" onClick={() => setStep(3)}>
-              Continue <ArrowRight className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Step 3: Agents */}
-      {step === 3 && (
-        <div className="animate-fade-in">
-          <h2 className="text-xl font-semibold text-white mb-2">Set Up AI Agents</h2>
-          <p className="text-muted-foreground mb-2">
-            Choose which {domain === "biology" ? "molecular" : domain === "finance" ? "market" : "simulation"} participants to include.
-          </p>
-          <p className="text-xs text-white/20 mb-6">
-            Showing agents for: <span className="tag text-[10px]">{domain}</span>
-          </p>
-
           <div className="space-y-4">
-            {currentAgentTemplates.map((agent) => {
-              const isSelected = selectedAgents.some((a) => a.type === agent.type);
-              const agentData = selectedAgents.find((a) => a.type === agent.type);
-              return (
-                <Card
-                  key={agent.type}
-                  className={cn(
-                    "cursor-pointer transition-all",
-                    isSelected ? "border-white/20 bg-white/[0.04]" : "hover:border-white/20"
-                  )}
-                  onClick={() => toggleAgent(agent.type, agent.defaultCount)}
-                >
-                  <CardContent className="p-4">
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 surface-raised flex items-center justify-center text-xl flex-shrink-0">
-                        {agent.icon}
-                      </div>
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-white">{agent.label}</span>
-                          {isSelected && <span className="tag tag-green text-[10px]">active</span>}
-                        </div>
-                        <p className="text-xs text-white/35">{agent.description}</p>
-                      </div>
-                      {isSelected && (
-                        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                          <Input
-                            type="number"
-                            value={agentData?.count || agent.defaultCount}
-                            onChange={(e) => updateAgentCount(agent.type, parseInt(e.target.value))}
-                            className="w-24 h-8 text-xs"
-                          />
-                          <span className="text-xs text-white/25 whitespace-nowrap">agents</span>
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
+            {variables.map((variable, idx) => (
+              <div key={variable.name} className="surface p-4">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-white/70 font-medium">{variable.label}</span>
+                  <span className="text-sm font-semibold text-white font-mono">
+                    {variable.unit === "$" ? `$${variable.value.toLocaleString()}` :
+                     variable.unit ? `${variable.value}${["%" , "x", "K", "pH", "nM", "µM", "bps"].includes(variable.unit) ? "" : " "}${variable.unit}` :
+                     variable.value}
+                  </span>
+                </div>
+                <div className="text-[10px] text-white/20 mb-3">{variable.reasoning}</div>
+                <Slider
+                  min={variable.min}
+                  max={variable.max}
+                  step={variable.max > 10000 ? Math.max(1, Math.round((variable.max - variable.min) / 200)) : variable.max > 100 ? 1 : 0.1}
+                  value={[variable.value]}
+                  onValueChange={([val]) => {
+                    const updated = [...variables];
+                    updated[idx] = { ...updated[idx], value: val };
+                    setVariables(updated);
+                  }}
+                />
+                <div className="flex justify-between text-[10px] text-white/15 mt-1">
+                  <span>{variable.unit === "$" ? `$${variable.min.toLocaleString()}` : `${variable.min}${variable.unit}`}</span>
+                  <span>{variable.unit === "$" ? `$${variable.max.toLocaleString()}` : `${variable.max}${variable.unit}`}</span>
+                </div>
+              </div>
+            ))}
           </div>
 
           <div className="flex justify-between mt-8">
             <Button variant="ghost" onClick={() => setStep(2)}>
               <ArrowLeft className="w-4 h-4" /> Back
             </Button>
-            <Button variant="gradient" onClick={() => setStep(4)} disabled={selectedAgents.length === 0}>
+            <Button variant="gradient" onClick={() => setStep(4)}>
               Continue <ArrowRight className="w-4 h-4" />
             </Button>
           </div>
         </div>
       )}
 
-      {/* Step 4: Review & Run */}
+      {/* ==================== STEP 4: Agents ==================== */}
       {step === 4 && (
         <div className="animate-fade-in">
-          <h2 className="text-xl font-semibold text-white mb-2">Configure & Launch</h2>
-          <p className="text-muted-foreground mb-6">Review your setup and configure simulation parameters.</p>
+          <h2 className="text-xl font-semibold text-white mb-1">AI Agents</h2>
+          <p className="text-xs text-white/35 mb-6">These agents were configured based on your scenario. Adjust counts or remove any.</p>
 
-          <div className="grid grid-cols-2 gap-6 mb-6">
+          <div className="space-y-3">
+            {agents.map((agent, idx) => (
+              <div key={agent.type} className="surface p-4 flex items-center gap-4">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-xs font-medium text-white">{agent.label}</span>
+                    <span className="tag tag-green text-[10px]">active</span>
+                  </div>
+                  <p className="text-[10px] text-white/25">{agent.reasoning}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    value={agent.count}
+                    onChange={(e) => {
+                      const updated = [...agents];
+                      updated[idx] = { ...updated[idx], count: parseInt(e.target.value) || 1 };
+                      setAgents(updated);
+                    }}
+                    className="w-20 h-8 text-xs"
+                  />
+                  <button
+                    onClick={() => setAgents(agents.filter((_, i) => i !== idx))}
+                    className="text-white/20 hover:text-red-400 transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-between mt-8">
+            <Button variant="ghost" onClick={() => setStep(3)}>
+              <ArrowLeft className="w-4 h-4" /> Back
+            </Button>
+            <Button variant="gradient" onClick={() => setStep(5)} disabled={agents.length === 0}>
+              Continue <ArrowRight className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== STEP 5: Review & Launch ==================== */}
+      {step === 5 && (
+        <div className="animate-fade-in">
+          <h2 className="text-xl font-semibold text-white mb-1">Review & Launch</h2>
+          <p className="text-xs text-white/35 mb-6">Final check before running Monte Carlo simulation.</p>
+
+          <div className="grid grid-cols-2 gap-4 mb-6">
             <Card>
               <CardHeader><CardTitle className="text-sm">Number of Runs</CardTitle></CardHeader>
               <CardContent>
                 <div className="text-3xl font-bold text-white mb-3">{numRuns.toLocaleString()}</div>
                 <Slider min={100} max={10000} step={100} value={[numRuns]} onValueChange={([v]) => setNumRuns(v)} />
-                <div className="flex justify-between text-xs text-muted-foreground mt-1.5">
-                  <span>100 (fast)</span><span>10,000 (precise)</span>
-                </div>
+                <div className="flex justify-between text-[10px] text-white/20 mt-1"><span>100</span><span>10,000</span></div>
               </CardContent>
             </Card>
             <Card>
               <CardHeader><CardTitle className="text-sm">Time Horizon</CardTitle></CardHeader>
               <CardContent>
-                <div className="text-3xl font-bold text-white/70 mb-3">
-                  {category === "biology" ? `${timeHorizon * 1000} steps` :
-                   category === "finance" ? `${timeHorizon} months` :
-                   `${timeHorizon} months`}
-                </div>
+                <div className="text-3xl font-bold text-white/70 mb-3">{timeHorizon} {isBiology ? "periods" : "months"}</div>
                 <Slider min={1} max={60} step={1} value={[timeHorizon]} onValueChange={([v]) => setTimeHorizon(v)} />
-                <div className="flex justify-between text-xs text-muted-foreground mt-1.5">
-                  <span>{category === "biology" ? "1K steps" : "1 month"}</span>
-                  <span>{category === "biology" ? "60K steps" : "5 years"}</span>
-                </div>
+                <div className="flex justify-between text-[10px] text-white/20 mt-1"><span>1</span><span>60</span></div>
               </CardContent>
             </Card>
           </div>
 
           {/* Summary */}
-          <Card className="mb-6">
-            <CardHeader><CardTitle className="text-sm">Simulation Summary</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Name</span>
-                <span className="text-white font-medium">{name}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Category</span>
-                <span className="tag">{category}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Domain</span>
-                <span className="tag">{domain}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Variables</span>
-                <span className="text-white">{variables.length} configured</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Agents</span>
-                <span className="text-white">
-                  {selectedAgents.reduce((sum, a) => sum + a.count, 0).toLocaleString()} total
-                </span>
-              </div>
-              {uploadedData && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Uploaded Data</span>
-                  <span className="text-white">{uploadedData.fileName} ({uploadedData.rowCount} rows)</span>
+          <div className="surface mb-6">
+            <div className="px-5 py-3 border-b border-white/[0.06]">
+              <span className="text-xs text-white/25 tracking-widest uppercase">simulation summary</span>
+            </div>
+            <div className="px-5 py-3 space-y-2.5">
+              {[
+                ["name", name],
+                ["category", category],
+                ["variables", `${variables.length} configured`],
+                ["agents", `${agents.reduce((s, a) => s + a.count, 0).toLocaleString()} total across ${agents.length} types`],
+                ["runs", numRuns.toLocaleString()],
+                ["time horizon", `${timeHorizon} ${isBiology ? "periods" : "months"}`],
+                ...(uploadedData ? [["uploaded data", `${uploadedData.fileName} (${uploadedData.rowCount} rows)`]] : []),
+                ["est. time", `~${Math.ceil(numRuns / 500)} seconds`],
+              ].map(([label, value]) => (
+                <div key={label} className="flex justify-between text-xs">
+                  <span className="text-white/30">{label}</span>
+                  <span className="text-white/70">{value}</span>
                 </div>
-              )}
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Estimated time</span>
-                <span className="text-emerald-400">~{Math.ceil(numRuns / 500)} seconds</span>
+              ))}
+            </div>
+          </div>
+
+          {/* Assumptions reminder */}
+          {analysis && (
+            <div className="surface mb-6 px-5 py-3">
+              <div className="text-[10px] text-white/20 tracking-widest uppercase mb-2">ai assumptions</div>
+              <div className="space-y-1">
+                {analysis.assumptions.slice(0, 5).map((a, i) => (
+                  <div key={i} className="flex items-start gap-2 text-[11px] text-white/30">
+                    <div className="w-1 h-1 bg-white/15 shrink-0 mt-1.5" />
+                    <span>{a}</span>
+                  </div>
+                ))}
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          )}
 
           <div className="flex justify-between">
-            <Button variant="ghost" onClick={() => setStep(3)}>
+            <Button variant="ghost" onClick={() => setStep(4)}>
               <ArrowLeft className="w-4 h-4" /> Back
             </Button>
             <Button variant="gradient" size="lg" onClick={handleSubmit} disabled={loading}>

@@ -67,6 +67,7 @@ class SimulationConfig(BaseModel):
     time_horizon: int = Field(ge=1, le=120, default=12)  # months
     template_id: Optional[str] = None
     uploaded_data: Optional[Dict[str, List[float]]] = None  # column name → values
+    company_context: Optional[Dict[str, Any]] = None  # user's real scenario context for AI insights
 
 
 class TimelinePoint(BaseModel):
@@ -122,3 +123,38 @@ class SimulationResponse(BaseModel):
 class RunSimulationRequest(BaseModel):
     num_runs: Optional[int] = None
     variable_overrides: Optional[Dict[str, float]] = None
+
+
+# --- Company Context for AI-powered simulation setup ---
+
+class CompanyContext(BaseModel):
+    """Rich context about the user's real scenario, used by Claude to generate simulation params."""
+    category: SimulationCategory
+    context: Dict[str, Any]  # flexible dict — shape depends on category
+
+
+class AIGeneratedVariable(BaseModel):
+    name: str
+    label: str
+    value: float
+    min: float
+    max: float
+    unit: str
+    reasoning: str
+
+
+class AIGeneratedAgent(BaseModel):
+    type: str
+    label: str
+    count: int
+    sensitivity: float
+    reasoning: str
+
+
+class ContextAnalysisResponse(BaseModel):
+    variables: List[AIGeneratedVariable]
+    agents: List[AIGeneratedAgent]
+    assumptions: List[str]
+    success_criteria: str
+    time_horizon: int
+    num_runs: int

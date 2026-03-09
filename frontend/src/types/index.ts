@@ -35,6 +35,7 @@ export interface SimulationConfig {
   timeHorizon: number; // months
   templateId?: string;
   uploadedData?: Record<string, number[]>; // column name → values
+  companyContext?: Record<string, any>; // user's real scenario context
 }
 
 export interface SimulationRun {
@@ -123,4 +124,82 @@ export interface User {
   avatarUrl?: string;
   plan: "free" | "pro" | "enterprise";
   simulationCount: number;
+}
+
+// --- Company Context for AI-powered simulation setup ---
+
+export interface BusinessContext {
+  companyName: string;
+  industry: string;
+  businessModel: string;
+  stage: string;
+  currentMrr: string;
+  monthlyBurn: string;
+  runwayMonths: string;
+  teamSize: string;
+  fundingRaised: string;
+  customerCount: string;
+  targetMarketSize: string;
+  competitors: string;
+  differentiator: string;
+  geoMarket: string;
+  pricingModel: string;
+  currentPrice: string;
+  acquisitionChannels: string[];
+}
+
+export interface FinanceContext {
+  investmentType: string;
+  startingCapital: string;
+  investmentHorizon: string;
+  riskProfile: string;
+  targetAssets: string;
+  portfolioComposition: string;
+  marketCondition: string;
+  incomeRequirements: string;
+}
+
+export interface BiologyContext {
+  researchGoal: string;
+  targetMolecule: string;
+  bindingPartners: string;
+  temperatureRange: string;
+  phRange: string;
+  solvent: string;
+  experimentalData: string;
+  desiredOutcome: string;
+}
+
+export interface TrendContext {
+  dataDomain: string;
+  historicalPeriod: string;
+  forecastHorizon: string;
+  seasonalPatterns: string;
+  externalFactors: string;
+  dataFrequency: string;
+}
+
+export type CompanyContext = BusinessContext | FinanceContext | BiologyContext | TrendContext;
+
+export interface AIAnalysisResponse {
+  variables: Array<{
+    name: string;
+    label: string;
+    value: number;
+    min: number;
+    max: number;
+    unit: string;
+    reasoning: string;
+  }>;
+  agents: Array<{
+    type: string;
+    label: string;
+    count: number;
+    sensitivity: number;
+    reasoning: string;
+  }>;
+  assumptions: string[];
+  successCriteria: string;
+  timeHorizon: number;
+  numRuns: number;
 }

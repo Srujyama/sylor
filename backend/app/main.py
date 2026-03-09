@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 import time
 
 from app.config import settings
-from app.routers import simulations, templates, upload
+from app.routers import simulations, templates, upload, context
 
 app = FastAPI(
     title="Sylor API",
@@ -31,6 +31,7 @@ app.add_middleware(
 app.include_router(simulations.router)
 app.include_router(templates.router)
 app.include_router(upload.router)
+app.include_router(context.router)
 
 
 @app.get("/")
