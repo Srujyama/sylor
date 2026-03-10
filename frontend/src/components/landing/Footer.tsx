@@ -4,15 +4,15 @@ import { Github, Twitter } from "lucide-react";
 const footerLinks = {
   product: [
     { label: "features", href: "#features" },
-    { label: "templates", href: "#templates" },
+    { label: "templates", href: "/templates" },
     { label: "pricing", href: "#pricing" },
     { label: "changelog", href: "/changelog" },
   ],
-  company: [
-    { label: "about", href: "/about" },
-    { label: "blog", href: "/blog" },
-    { label: "careers", href: "/careers" },
-    { label: "contact", href: "/contact" },
+  resources: [
+    { label: "documentation", href: "/docs" },
+    { label: "API reference", href: "/docs" },
+    { label: "getting started", href: "/docs" },
+    { label: "changelog", href: "/changelog" },
   ],
   legal: [
     { label: "privacy", href: "/privacy" },

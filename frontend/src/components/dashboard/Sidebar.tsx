@@ -2,14 +2,17 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutDashboard, Plus, Layers, History, Settings, LogOut } from "lucide-react";
+import {
+  LayoutDashboard, Plus, Layers, LayoutTemplate, BookOpen, Settings, LogOut,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logOut } from "@/lib/firebase/auth";
 
 const navItems = [
   { label: "dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "simulations", href: "/simulations", icon: Layers },
-  { label: "history", href: "/simulations?filter=completed", icon: History },
+  { label: "templates", href: "/templates", icon: LayoutTemplate },
+  { label: "docs", href: "/docs", icon: BookOpen },
   { label: "settings", href: "/settings", icon: Settings },
 ];
 
@@ -50,8 +53,7 @@ export function Sidebar() {
         {navItems.map((item) => {
           const active =
             pathname === item.href ||
-            (item.href === "/simulations" && pathname.startsWith("/simulations") && !pathname.includes("?filter=completed")) ||
-            (item.href === "/simulations?filter=completed" && pathname.includes("?filter=completed"));
+            (item.href !== "/dashboard" && pathname.startsWith(item.href));
           return (
             <Link
               key={item.href}

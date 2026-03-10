@@ -18,9 +18,10 @@ export function Navbar() {
   const navLinks = [
     { label: "features", href: "#features" },
     { label: "domains", href: "#domains" },
-    { label: "how it works", href: "#how-it-works" },
     { label: "templates", href: "#templates" },
     { label: "pricing", href: "#pricing" },
+    { label: "docs", href: "/docs" },
+    { label: "changelog", href: "/changelog" },
   ];
 
   return (
