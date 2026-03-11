@@ -10,7 +10,8 @@ import {
   BarChart2, Trash2, Copy, RotateCcw, Search, Filter,
 } from "lucide-react";
 import { onAuthChange } from "@/lib/firebase/auth";
-import { getApiUrl, formatCurrency } from "@/lib/utils";
+import { listSimulations } from "@/lib/api";
+import { formatCurrency } from "@/lib/utils";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell,
@@ -91,9 +92,7 @@ export default function DashboardPage() {
   const fetchSimulations = useCallback(async () => {
     try {
       setError(null);
-      const res = await fetch(`${getApiUrl()}/api/simulations?user_id=${userId}`);
-      if (!res.ok) throw new Error("Failed to fetch simulations");
-      const data = await res.json();
+      const data = await listSimulations(userId);
       // Map snake_case to camelCase
       const mapped: Simulation[] = data.map((s: any) => ({
         id: s.id,

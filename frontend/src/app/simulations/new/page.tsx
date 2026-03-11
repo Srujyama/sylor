@@ -18,7 +18,8 @@ import {
   Upload, FileSpreadsheet, X, Table, Sparkles, Check, AlertCircle, HelpCircle,
 } from "lucide-react";
 import Link from "next/link";
-import { cn, getApiUrl } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { analyzeContext, createSimulation, runSimulation } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import type { SimulationCategory, AIAnalysisResponse } from "@/types";
 
@@ -125,18 +126,7 @@ export default function NewSimulationPage() {
     };
 
     try {
-      const res = await fetch(`${getApiUrl()}/api/context/analyze`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category, context: fullContext }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `Server error ${res.status}`);
-      }
-
-      const data: AIAnalysisResponse = await res.json();
+      const data: AIAnalysisResponse = await analyzeContext({ category, context: fullContext });
       setAnalysis(data);
       setVariables(data.variables);
       setAgents(data.agents);
@@ -216,21 +206,10 @@ export default function NewSimulationPage() {
         company_context: { ...context, acquisitionChannels: selectedChannels },
       };
 
-      const res = await fetch(`${getApiUrl()}/api/simulations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config, user_id: "demo-user" }),
-      });
-
-      if (!res.ok) throw new Error("Failed to create simulation");
-      const sim = await res.json();
+      const sim = await createSimulation({ config, user_id: "demo-user" });
 
       // Auto-run the simulation
-      await fetch(`${getApiUrl()}/api/simulations/${sim.id}/run`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ num_runs: numRuns }),
-      });
+      await runSimulation(sim.id, { num_runs: numRuns });
 
       toast({ title: "Simulation launched", description: `Running ${numRuns.toLocaleString()} Monte Carlo iterations...`, variant: "success" });
       router.push(`/simulations/${sim.id}`);

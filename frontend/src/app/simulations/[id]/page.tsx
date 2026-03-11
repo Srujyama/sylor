@@ -13,9 +13,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   ArrowLeft, Zap, TrendingUp, AlertTriangle, CheckCircle, Info,
   BarChart3, GitBranch, Users2, Lightbulb, RefreshCw, Download, Loader2,
+  Share2, FileJson, FileSpreadsheet, Clock,
 } from "lucide-react";
 import Link from "next/link";
-import { cn, getApiUrl, formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency, getApiUrl } from "@/lib/utils";
+import { exportToCSV, exportToJSON } from "@/lib/api";
 import { getDomainLabels } from "@/lib/domain-labels";
 import { useToast } from "@/components/ui/toast";
 import {
@@ -40,6 +42,48 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
   const [error, setError] = useState("");
   const [variableOverrides, setVariableOverrides] = useState<Record<string, number>>({});
   const [isRerunning, setIsRerunning] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+
+  function handleExportCSV() {
+    if (!results) return;
+    const timeline = (results.timeline_aggregated || []).map((t: any) => ({
+      month: t.month,
+      avg_revenue: t.avg_revenue,
+      p10_revenue: t.p10_revenue,
+      p90_revenue: t.p90_revenue,
+      avg_customers: t.avg_customers,
+      avg_market_share: t.avg_market_share,
+    }));
+    exportToCSV(timeline, `${simulation?.name || "simulation"}-timeline`);
+    toast({ title: "Exported as CSV", variant: "success" });
+    setShowExportMenu(false);
+  }
+
+  function handleExportJSON() {
+    if (!results) return;
+    exportToJSON({
+      simulation: { name: simulation?.name, category: simulation?.category, config: simulation?.config },
+      results: {
+        success_probability: results.success_probability,
+        confidence_interval: results.confidence_interval,
+        avg_revenue: results.avg_revenue,
+        avg_market_share: results.avg_market_share,
+        avg_breakeven_month: results.avg_breakeven_month,
+        risk_factors: results.risk_factors,
+        key_insights: results.key_insights,
+        timeline_aggregated: results.timeline_aggregated,
+        outcome_distribution: results.outcome_distribution,
+      },
+    }, `${simulation?.name || "simulation"}-results`);
+    toast({ title: "Exported as JSON", variant: "success" });
+    setShowExportMenu(false);
+  }
+
+  function handleShare() {
+    const url = window.location.href;
+    navigator.clipboard.writeText(url);
+    toast({ title: "Link copied to clipboard", variant: "success" });
+  }
 
   // Fetch simulation data
   useEffect(() => {
@@ -260,7 +304,22 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="glass" size="sm"><Download className="w-4 h-4" /> Export</Button>
+          <Button variant="glass" size="sm" onClick={handleShare}><Share2 className="w-4 h-4" /> Share</Button>
+          <div className="relative">
+            <Button variant="glass" size="sm" onClick={() => setShowExportMenu(!showExportMenu)}>
+              <Download className="w-4 h-4" /> Export
+            </Button>
+            {showExportMenu && (
+              <div className="absolute right-0 top-full mt-1 z-50 bg-[#111] border border-white/10 py-1 min-w-[160px]">
+                <button onClick={handleExportCSV} className="w-full text-left px-3 py-2 text-xs text-white/60 hover:bg-white/[0.05] hover:text-white flex items-center gap-2">
+                  <FileSpreadsheet className="w-3 h-3" /> Export as CSV
+                </button>
+                <button onClick={handleExportJSON} className="w-full text-left px-3 py-2 text-xs text-white/60 hover:bg-white/[0.05] hover:text-white flex items-center gap-2">
+                  <FileJson className="w-3 h-3" /> Export as JSON
+                </button>
+              </div>
+            )}
+          </div>
           <Button variant="gradient" size="sm" asChild>
             <Link href={`/simulations/${params.id}/compare`}><GitBranch className="w-4 h-4" /> Compare</Link>
           </Button>

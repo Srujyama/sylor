@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import {
   Plus, Search, Loader2, ArrowRight, RotateCcw, Trash2, Copy,
 } from "lucide-react";
-import { getApiUrl } from "@/lib/utils";
+import { listSimulations, duplicateSimulation as duplicateSimApi, deleteSimulation as deleteSimApi } from "@/lib/api";
 import { onAuthChange } from "@/lib/firebase/auth";
 import { useToast } from "@/components/ui/toast";
 import type { Simulation } from "@/types";
@@ -66,9 +66,7 @@ export default function SimulationsPage() {
   const fetchSimulations = useCallback(async () => {
     try {
       setError(null);
-      const res = await fetch(`${getApiUrl()}/api/simulations?user_id=${userId}`);
-      if (!res.ok) throw new Error("Failed to fetch");
-      const data = await res.json();
+      const data = await listSimulations(userId);
       const mapped: Simulation[] = data.map((s: any) => ({
         id: s.id,
         userId: s.user_id,
@@ -111,8 +109,7 @@ export default function SimulationsPage() {
     e.preventDefault();
     e.stopPropagation();
     try {
-      const res = await fetch(`${getApiUrl()}/api/simulations/${simId}/duplicate`, { method: "POST" });
-      if (!res.ok) throw new Error("Failed to duplicate");
+      await duplicateSimApi(simId);
       toast({ title: "Simulation duplicated", variant: "success" });
       fetchSimulations();
     } catch {
@@ -124,8 +121,7 @@ export default function SimulationsPage() {
     e.preventDefault();
     e.stopPropagation();
     try {
-      const res = await fetch(`${getApiUrl()}/api/simulations/${simId}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete");
+      await deleteSimApi(simId);
       setSimulations((prev) => prev.filter((s) => s.id !== simId));
       toast({ title: "Simulation deleted" });
     } catch {

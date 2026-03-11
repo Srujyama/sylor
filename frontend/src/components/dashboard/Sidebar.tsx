@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard, Plus, Layers, LayoutTemplate, BookOpen, Settings, LogOut,
+  BarChart3, Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logOut } from "@/lib/firebase/auth";
@@ -11,6 +12,7 @@ import { logOut } from "@/lib/firebase/auth";
 const navItems = [
   { label: "dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "simulations", href: "/simulations", icon: Layers },
+  { label: "analytics", href: "/analytics", icon: BarChart3 },
   { label: "templates", href: "/templates", icon: LayoutTemplate },
   { label: "docs", href: "/docs", icon: BookOpen },
   { label: "settings", href: "/settings", icon: Settings },
@@ -73,7 +75,15 @@ export function Sidebar() {
       </nav>
 
       {/* Bottom */}
-      <div className="px-2 py-3 border-t border-white/[0.06]">
+      <div className="px-2 py-3 border-t border-white/[0.06] space-y-0.5">
+        <button
+          onClick={() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }))}
+          className="flex items-center gap-2.5 px-3 py-2 text-xs text-white/25 hover:text-white/60 hover:bg-white/[0.03] transition-colors w-full"
+        >
+          <Search className="w-3.5 h-3.5 shrink-0" />
+          <span className="flex-1 text-left">search</span>
+          <kbd className="text-[9px] px-1 py-0.5 border border-white/[0.08] text-white/15">⌘K</kbd>
+        </button>
         <button
           onClick={handleLogout}
           className="flex items-center gap-2.5 px-3 py-2 text-xs text-white/25 hover:text-white/60 hover:bg-white/[0.03] transition-colors w-full"

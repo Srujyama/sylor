@@ -1,0 +1,220 @@
+/**
+ * Sylor API Client
+ * Centralized API layer with retry, timeout, and error handling
+ */
+
+import { getApiUrl } from "./utils";
+
+interface FetchOptions extends RequestInit {
+  retries?: number;
+  retryDelay?: number;
+  timeout?: number;
+}
+
+class ApiError extends Error {
+  status: number;
+  data: any;
+  constructor(message: string, status: number, data?: any) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.data = data;
+  }
+}
+
+async function fetchWithRetry(
+  url: string,
+  options: FetchOptions = {}
+): Promise<Response> {
+  const { retries = 2, retryDelay = 1000, timeout = 30000, ...fetchOpts } = options;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const res = await fetch(url, {
+        ...fetchOpts,
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...fetchOpts.headers,
+        },
+      });
+      clearTimeout(timer);
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new ApiError(
+          data?.detail || `HTTP ${res.status}`,
+          res.status,
+          data
+        );
+      }
+
+      return res;
+    } catch (err: any) {
+      clearTimeout(timer);
+
+      // Don't retry client errors (4xx)
+      if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+        throw err;
+      }
+
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, retryDelay * (attempt + 1)));
+        continue;
+      }
+
+      if (err.name === "AbortError") {
+        throw new ApiError("Request timed out", 408);
+      }
+
+      throw err instanceof ApiError
+        ? err
+        : new ApiError(err.message || "Network error", 0);
+    }
+  }
+
+  throw new ApiError("Max retries exceeded", 0);
+}
+
+// ─── Simulations ──────────────────────────────────────────
+
+export async function listSimulations(userId: string) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations?user_id=${userId}`
+  );
+  return res.json();
+}
+
+export async function getSimulation(simId: string) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}`
+  );
+  return res.json();
+}
+
+export async function createSimulation(data: any) {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/simulations`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function runSimulation(
+  simId: string,
+  opts?: { num_runs?: number; variable_overrides?: Record<string, number> }
+) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/run`,
+    {
+      method: "POST",
+      body: JSON.stringify(opts || {}),
+    }
+  );
+  return res.json();
+}
+
+export async function getResults(simId: string) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/results`
+  );
+  return res.json();
+}
+
+export async function duplicateSimulation(simId: string) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/duplicate`,
+    { method: "POST" }
+  );
+  return res.json();
+}
+
+export async function deleteSimulation(simId: string) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}`,
+    { method: "DELETE" }
+  );
+  return res.json();
+}
+
+// ─── Context Analysis ─────────────────────────────────────
+
+export async function analyzeContext(data: any) {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/context/analyze`, {
+    method: "POST",
+    body: JSON.stringify(data),
+    timeout: 60000, // AI analysis can take longer
+    retries: 1,
+  });
+  return res.json();
+}
+
+// ─── Templates ────────────────────────────────────────────
+
+export async function listTemplates(category?: string) {
+  const params = category ? `?category=${category}` : "";
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/templates${params}`
+  );
+  return res.json();
+}
+
+export async function getTemplate(templateId: string) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/templates/${templateId}`
+  );
+  return res.json();
+}
+
+// ─── Upload ───────────────────────────────────────────────
+
+export async function parseUpload(file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetchWithRetry(`${getApiUrl()}/api/upload/parse`, {
+    method: "POST",
+    body: formData,
+    headers: {}, // Let browser set content-type with boundary
+    timeout: 30000,
+  });
+  return res.json();
+}
+
+// ─── Export helpers ───────────────────────────────────────
+
+export function exportToCSV(data: any[], filename: string) {
+  if (!data.length) return;
+  const headers = Object.keys(data[0]);
+  const rows = data.map((row) =>
+    headers.map((h) => {
+      const val = row[h];
+      if (val === null || val === undefined) return "";
+      if (typeof val === "string" && (val.includes(",") || val.includes('"')))
+        return `"${val.replace(/"/g, '""')}"`;
+      return String(val);
+    }).join(",")
+  );
+  const csv = [headers.join(","), ...rows].join("\n");
+  downloadBlob(csv, `${filename}.csv`, "text/csv");
+}
+
+export function exportToJSON(data: any, filename: string) {
+  const json = JSON.stringify(data, null, 2);
+  downloadBlob(json, `${filename}.json`, "application/json");
+}
+
+function downloadBlob(content: string, filename: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
