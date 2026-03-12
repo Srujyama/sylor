@@ -127,25 +127,41 @@ export default function NewSimulationPage() {
     setAnalysisProgress(0);
     setAnalysisStage("Reading your scenario...");
 
-    // Animate progress through realistic stages while waiting for the API
-    const stages = [
-      { at: 800,  pct: 12, label: "Parsing company context..." },
-      { at: 2000, pct: 28, label: "Calibrating financial variables..." },
-      { at: 3500, pct: 44, label: "Modeling market dynamics..." },
-      { at: 5000, pct: 58, label: "Configuring AI agents..." },
-      { at: 6500, pct: 70, label: "Generating simulation parameters..." },
-      { at: 8000, pct: 82, label: "Validating variable ranges..." },
-      { at: 9200, pct: 91, label: "Finalizing analysis..." },
+    // Ordered stages with the timestamps they become active (ms since start)
+    // These cover the first ~15s of typical Claude latency.
+    const stages: Array<{ at: number; label: string }> = [
+      { at: 900,  label: "Parsing company context..." },
+      { at: 2500, label: "Calibrating financial variables..." },
+      { at: 5000, label: "Modeling market dynamics..." },
+      { at: 8000, label: "Configuring AI agents..." },
+      { at: 12000, label: "Generating simulation parameters..." },
+      { at: 18000, label: "Validating variable ranges..." },
+      { at: 25000, label: "Building Monte Carlo config..." },
+      { at: 35000, label: "Reviewing assumptions..." },
+      { at: 48000, label: "Cross-checking variable bounds..." },
+      { at: 65000, label: "Finalizing analysis..." },
     ];
 
     const timers: NodeJS.Timeout[] = [];
-    stages.forEach(({ at, pct, label }) => {
-      const t = setTimeout(() => {
-        setAnalysisProgress(pct);
-        setAnalysisStage(label);
-      }, at);
-      timers.push(t);
+
+    // Stage label timers
+    stages.forEach(({ at, label }) => {
+      timers.push(setTimeout(() => setAnalysisStage(label), at));
     });
+
+    // Continuous progress ticker: runs every 400ms, asymptotically approaches 94%
+    // so it ALWAYS looks alive — never stalls.
+    let currentPct = 0;
+    const ticker = setInterval(() => {
+      setAnalysisProgress((prev) => {
+        // Slow down as we approach 94% (asymptote) — never reaches 95 on its own
+        const remaining = 94 - prev;
+        const increment = Math.max(0.15, remaining * 0.025);
+        currentPct = Math.min(94, prev + increment);
+        return currentPct;
+      });
+    }, 400);
+    timers.push(ticker);
 
     const fullContext = {
       ...context,
@@ -163,12 +179,12 @@ export default function NewSimulationPage() {
         timeHorizon: raw.time_horizon ?? raw.timeHorizon ?? 12,
         numRuns: raw.num_runs ?? raw.numRuns ?? 1000,
       };
-      // Jump to 100% on success
+      // Flush all timers and jump to 100%
       timers.forEach(clearTimeout);
+      clearInterval(ticker);
       setAnalysisProgress(100);
       setAnalysisStage("Analysis complete!");
-      // Small delay so user sees 100% before content renders
-      await new Promise((r) => setTimeout(r, 350));
+      await new Promise((r) => setTimeout(r, 300));
       setAnalysis(data);
       setVariables(data.variables);
       setAgents(data.agents);
@@ -177,6 +193,7 @@ export default function NewSimulationPage() {
       toast({ title: "Analysis complete", description: `Generated ${data.variables.length} variables and ${data.agents.length} agents`, variant: "success" });
     } catch (e: any) {
       timers.forEach(clearTimeout);
+      clearInterval(ticker);
       setAnalysisProgress(0);
       setAnalysisStage("");
       setAnalysisError(e.message || "Failed to analyze context");

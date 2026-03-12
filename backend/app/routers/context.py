@@ -16,35 +16,84 @@ router = APIRouter(prefix="/api/context", tags=["context"])
 def _extract_json(text: str) -> dict:
     """
     Robustly extract a JSON object from Claude's response.
-    Handles: markdown code fences, trailing commas, JS-style comments.
+    Handles: markdown code fences, trailing commas, JS comments,
+    unescaped control characters, and truncated responses.
     """
-    # 1. Strip markdown code fences if present
+    original = text
+
+    # 1. Strip markdown code fences if present (```json ... ``` or ``` ... ```)
     fenced = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
     if fenced:
         text = fenced.group(1).strip()
 
-    # 2. Find the outermost JSON object
+    # 2. Find the outermost { ... } — use brace counting to get the real end
     start = text.find("{")
-    end = text.rfind("}") + 1
-    if start < 0 or end <= start:
+    if start < 0:
         raise ValueError("No JSON object found in response")
+
+    depth = 0
+    in_string = False
+    escape_next = False
+    end = -1
+    for i, ch in enumerate(text[start:], start):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_string = not in_string
+        if not in_string:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+
+    if end < 0:
+        # Truncated — try to recover with rfind as fallback
+        end = text.rfind("}") + 1
+        if end <= start:
+            raise ValueError("No complete JSON object found in response")
+
     raw = text[start:end]
 
-    # 3. Try direct parse first (fast path)
+    # 3. Fast path — try direct parse
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         pass
 
-    # 4. Remove single-line // comments
-    raw = re.sub(r"//[^\n]*", "", raw)
+    # 4. Clean up common Claude quirks:
+    # a) Remove // line comments
+    raw = re.sub(r"//[^\n\"]*", "", raw)
+    # b) Remove trailing commas before } or ]
+    raw = re.sub(r",(\s*[}\]])", r"\1", raw)
+    # c) Replace unescaped control characters inside strings
+    raw = re.sub(r'[\x00-\x1f\x7f]', ' ', raw)
 
-    # 5. Remove trailing commas before } or ]
-    raw = re.sub(r",\s*([}\]])", r"\1", raw)
-
-    # 6. Try again
     try:
         return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # 5. Last resort: strip everything after the last complete top-level key-value
+    # by progressively truncating until we can close the object
+    stripped = raw.rstrip()
+    # Remove any incomplete last item
+    for pattern in [r',\s*\{[^}]*$', r',\s*"[^"]*$', r',\s*\[[^\]]*$']:
+        stripped = re.sub(pattern, '', stripped)
+    # Close open arrays/objects
+    open_b = stripped.count('[') - stripped.count(']')
+    open_c = stripped.count('{') - stripped.count('}')
+    stripped += ']' * max(0, open_b) + '}' * max(0, open_c)
+    stripped = re.sub(r',(\s*[}\]])', r'\1', stripped)
+
+    try:
+        return json.loads(stripped)
     except json.JSONDecodeError as e:
         raise ValueError(f"Could not parse JSON from AI response: {e}") from e
 
@@ -247,13 +296,24 @@ async def analyze_context(body: CompanyContext):
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     try:
-        response = await client.messages.create(
+        # Use streaming to collect the full response — avoids read-timeout on slow connections
+        # and lets us start parsing as soon as the last token arrives.
+        text_chunks: list[str] = []
+        async with client.messages.stream(
             model="claude-sonnet-4-6",
-            max_tokens=4000,
+            max_tokens=4096,
+            system=(
+                "You are a simulation configuration generator. "
+                "You MUST respond with ONLY a single valid JSON object — "
+                "no markdown, no code fences, no comments, no explanation. "
+                "The JSON must be syntactically valid and complete."
+            ),
             messages=[{"role": "user", "content": prompt}],
-        )
+        ) as stream:
+            async for chunk in stream.text_stream:
+                text_chunks.append(chunk)
 
-        text = response.content[0].text
+        text = "".join(text_chunks)
         data = _extract_json(text)
 
         return ContextAnalysisResponse(
