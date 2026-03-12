@@ -68,7 +68,8 @@ function timeAgo(dateStr: string): string {
 export default function DashboardPage() {
   const router = useRouter();
   const [userName, setUserName] = useState("there");
-  const [userId, setUserId] = useState("demo-user");
+  const [userId, setUserId] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [simulations, setSimulations] = useState<Simulation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -76,20 +77,26 @@ export default function DashboardPage() {
   const [filterStatus, setFilterStatus] = useState<string>("all");
 
   useEffect(() => {
+    // Wait for Firebase to resolve auth state before doing anything
     const unsubscribe = onAuthChange((user) => {
-      if (user?.displayName) {
-        setUserName(user.displayName.split(" ")[0]);
-      } else if (user?.email) {
-        setUserName(user.email.split("@")[0]);
-      }
-      if (user?.uid) {
+      if (user) {
+        if (user.displayName) {
+          setUserName(user.displayName.split(" ")[0]);
+        } else if (user.email) {
+          setUserName(user.email.split("@")[0]);
+        }
         setUserId(user.uid);
+      } else {
+        // Not logged in — redirect to login
+        router.replace("/login");
       }
+      setAuthReady(true);
     });
     return () => unsubscribe();
-  }, []);
+  }, [router]);
 
   const fetchSimulations = useCallback(async () => {
+    if (!userId) return;
     try {
       setError(null);
       const data = await listSimulations(userId);
@@ -127,11 +134,13 @@ export default function DashboardPage() {
   }, [userId]);
 
   useEffect(() => {
+    // Only start fetching once auth is resolved and we have a user
+    if (!authReady || !userId) return;
     fetchSimulations();
     // Poll for running simulations
     const interval = setInterval(fetchSimulations, 8000);
     return () => clearInterval(interval);
-  }, [fetchSimulations]);
+  }, [authReady, userId, fetchSimulations]);
 
   // Computed stats
   const completedSims = simulations.filter((s) => s.status === "completed");

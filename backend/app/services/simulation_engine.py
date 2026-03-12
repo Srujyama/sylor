@@ -433,7 +433,10 @@ class SimulationEngine:
         """Run a financial markets simulation."""
         agents = self._create_agents()
         portfolio_value = self._find_var(vars_, "portfolio_value", "starting_capital", "initial_capital", "capital", default=100000)
-        trading_days = int(self._find_var(vars_, "trading_days", "simulation_days", default=252))
+        # Cap trading_days: use time_horizon * ~21 trading days/month, max 252
+        default_days = min(252, self.config.time_horizon * 21)
+        trading_days = int(self._find_var(vars_, "trading_days", "simulation_days", default=default_days))
+        trading_days = min(trading_days, 252)  # Hard cap to prevent runaway loops
         initial_value = portfolio_value
         volatility = self._find_var(vars_, "volatility", "expected_volatility", "annual_volatility", default=20) / 100
         num_assets = int(self._find_var(vars_, "num_assets", "number_of_assets", "asset_count", default=5))
@@ -499,7 +502,8 @@ class SimulationEngine:
         """Run a molecular biology simulation."""
         agents = self._create_agents()
         num_molecules = int(self._find_var(vars_, "num_molecules", "molecule_count", "number_of_molecules", default=128))
-        sim_steps = int(self._find_var(vars_, "sim_steps", "simulation_steps", "total_steps", default=5000))
+        sim_steps = int(self._find_var(vars_, "sim_steps", "simulation_steps", "total_steps", default=1000))
+        sim_steps = min(sim_steps, 2000)  # Hard cap
 
         timeline = []
         total_bound = 0
@@ -551,7 +555,8 @@ class SimulationEngine:
     def _run_trend(self, vars_: Dict) -> Dict[str, Any]:
         """Run a trend analysis simulation."""
         agents = self._create_agents()
-        forecast_periods = int(self._find_var(vars_, "forecast_periods", "forecast_horizon", "prediction_periods", default=30))
+        forecast_periods = int(self._find_var(vars_, "forecast_periods", "forecast_horizon", "prediction_periods", default=self.config.time_horizon * 2))
+        forecast_periods = min(forecast_periods, 120)  # Hard cap
         confidence_level = self._find_var(vars_, "confidence_level", "confidence_threshold", default=95) / 100
 
         timeline = []
@@ -605,9 +610,9 @@ class SimulationEngine:
         """Run full Monte Carlo simulation."""
         n = num_runs or self.config.num_runs
 
-        # Run in batches to avoid blocking
+        # Run in batches — larger batches reduce asyncio overhead for CPU-bound tasks
         results = []
-        batch_size = 50
+        batch_size = 100
         for i in range(0, n, batch_size):
             batch = min(batch_size, n - i)
             batch_results = await asyncio.gather(

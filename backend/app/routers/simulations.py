@@ -6,7 +6,7 @@ from datetime import datetime
 
 from app.models.simulation import (
     SimulationConfig, SimulationCreate, SimulationResponse,
-    RunSimulationRequest, SimulationStatus,
+    RunSimulationRequest, SimulationStatus, AgentType,
 )
 from app.services.simulation_engine import SimulationEngine
 from app.services.ai_insights import generate_ai_insights
@@ -16,18 +16,96 @@ router = APIRouter(prefix="/api/simulations", tags=["simulations"])
 # In-memory store for demo (replace with Firebase Firestore in production via app/services/firebase_admin.py)
 _store: dict = {}
 
+# Map AI-generated agent type strings to valid AgentType enum values
+_AGENT_TYPE_MAP = {
+    # Direct matches (already valid)
+    "customer": "customer",
+    "competitor": "competitor",
+    "regulator": "regulator",
+    "investor": "investor",
+    "market": "market",
+    "trader": "trader",
+    "market_maker": "market_maker",
+    "molecule": "molecule",
+    "enzyme": "enzyme",
+    "data_stream": "data_stream",
+    # Common AI-invented variations → nearest valid type
+    "momentum_trader": "trader",
+    "value_investor": "investor",
+    "algorithmic_trader": "trader",
+    "quant_trader": "trader",
+    "retail_trader": "trader",
+    "institutional_investor": "investor",
+    "portfolio_manager": "investor",
+    "market_analyst": "market",
+    "market_participant": "market",
+    "market_force": "market",
+    "macro_force": "market",
+    "macro": "market",
+    "consumer": "customer",
+    "user": "customer",
+    "buyer": "customer",
+    "client": "customer",
+    "end_user": "customer",
+    "churn_agent": "customer",
+    "acquisition_agent": "customer",
+    "sales_agent": "customer",
+    "regulatory": "regulator",
+    "government": "regulator",
+    "policy_maker": "regulator",
+    "vc_investor": "investor",
+    "angel_investor": "investor",
+    "data": "data_stream",
+    "signal": "data_stream",
+    "trend": "data_stream",
+    "sensor": "data_stream",
+    "feed": "data_stream",
+    "ligand": "molecule",
+    "protein": "molecule",
+    "substrate": "molecule",
+    "catalyst": "enzyme",
+    "inhibitor": "molecule",
+}
+
+
+def _sanitize_agent_type(agent_type_str: str) -> str:
+    """Map an AI-generated agent type string to a valid AgentType enum value."""
+    s = str(agent_type_str).lower().strip().replace(" ", "_").replace("-", "_")
+    if s in _AGENT_TYPE_MAP:
+        return _AGENT_TYPE_MAP[s]
+    # Try partial match
+    for key, val in _AGENT_TYPE_MAP.items():
+        if key in s or s in key:
+            return val
+    # Default fallback: pick by category context
+    return "market"  # Safe default
+
 
 @router.post("", response_model=dict, status_code=201)
 async def create_simulation(payload: SimulationCreate):
     sim_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
+
+    # Sanitize agent types — AI may return types outside the enum
+    config_dict = payload.config.model_dump()
+    for agent in config_dict.get("agents", []):
+        raw_type = agent.get("type", "market")
+        if isinstance(raw_type, str):
+            agent["type"] = _sanitize_agent_type(raw_type)
+
+    # Re-validate config with sanitized types
+    try:
+        sanitized_config = SimulationConfig(**config_dict)
+    except Exception:
+        sanitized_config = payload.config  # Fallback to original if re-parse fails
+
     sim = {
         "id": sim_id,
         "user_id": payload.user_id,
-        "name": payload.config.name,
-        "description": payload.config.description,
-        "category": payload.config.category.value,
-        "config": payload.config.model_dump(),
+        "name": sanitized_config.name,
+        "description": sanitized_config.description,
+        "category": sanitized_config.category.value,
+        "config": sanitized_config.model_dump(),
         "status": SimulationStatus.DRAFT.value,
         "results": None,
         "created_at": now,

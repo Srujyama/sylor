@@ -26,7 +26,7 @@ async function fetchWithRetry(
   url: string,
   options: FetchOptions = {}
 ): Promise<Response> {
-  const { retries = 2, retryDelay = 1000, timeout = 30000, ...fetchOpts } = options;
+  const { retries = 2, retryDelay = 1500, timeout = 60000, ...fetchOpts } = options;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
@@ -67,7 +67,17 @@ async function fetchWithRetry(
       }
 
       if (err.name === "AbortError") {
-        throw new ApiError("Request timed out", 408);
+        throw new ApiError(
+          "The request took too long. The server may be starting up — please try again.",
+          408
+        );
+      }
+
+      if (err.message?.includes("Failed to fetch") || err.message?.includes("NetworkError") || err.message?.includes("network")) {
+        throw new ApiError(
+          "Could not reach the server. Check your connection or try again in a moment.",
+          0
+        );
       }
 
       throw err instanceof ApiError
@@ -76,7 +86,7 @@ async function fetchWithRetry(
     }
   }
 
-  throw new ApiError("Max retries exceeded", 0);
+  throw new ApiError("Max retries exceeded. Please try again.", 0);
 }
 
 // ─── Simulations ──────────────────────────────────────────
@@ -146,9 +156,25 @@ export async function analyzeContext(data: any) {
   const res = await fetchWithRetry(`${getApiUrl()}/api/context/analyze`, {
     method: "POST",
     body: JSON.stringify(data),
-    timeout: 60000, // AI analysis can take longer
+    timeout: 120000, // AI analysis can take 60-90s on cold start
     retries: 1,
   });
+  return res.json();
+}
+
+export async function runSimulationLong(
+  simId: string,
+  opts?: { num_runs?: number; variable_overrides?: Record<string, number> }
+) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/run`,
+    {
+      method: "POST",
+      body: JSON.stringify(opts || {}),
+      timeout: 120000, // Monte Carlo runs can take a while
+      retries: 0,      // Don't retry — avoid double-running
+    }
+  );
   return res.json();
 }
 

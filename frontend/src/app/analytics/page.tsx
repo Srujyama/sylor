@@ -41,18 +41,21 @@ interface SimData {
 }
 
 export default function AnalyticsPage() {
-  const [userId, setUserId] = useState("demo-user");
+  const [userId, setUserId] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [simulations, setSimulations] = useState<SimData[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const unsub = onAuthChange((user) => {
       if (user?.uid) setUserId(user.uid);
+      setAuthReady(true);
     });
     return () => unsub();
   }, []);
 
   const fetchData = useCallback(async () => {
+    if (!userId) return;
     try {
       const data = await listSimulations(userId);
       setSimulations(data);
@@ -61,7 +64,13 @@ export default function AnalyticsPage() {
     }
   }, [userId]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    if (!authReady || !userId) {
+      if (authReady) setLoading(false); // not logged in → stop spinner
+      return;
+    }
+    fetchData();
+  }, [authReady, userId, fetchData]);
 
   const completed = simulations.filter((s) => s.status === "completed");
   const totalRuns = simulations.reduce((acc, s) => acc + (s.run_count || 0), 0);

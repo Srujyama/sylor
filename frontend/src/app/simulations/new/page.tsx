@@ -2,7 +2,7 @@
 
 export const dynamic = 'force-dynamic';
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { SliderWithInput } from "@/components/ui/slider-with-input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -19,8 +20,9 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { analyzeContext, createSimulation, runSimulation } from "@/lib/api";
+import { analyzeContext, createSimulation, runSimulationLong } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
+import { getCurrentUser } from "@/lib/firebase/auth";
 import type { SimulationCategory, AIAnalysisResponse } from "@/types";
 
 // ---------- constants ----------
@@ -87,6 +89,9 @@ export default function NewSimulationPage() {
   const [analysis, setAnalysis] = useState<AIAnalysisResponse | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  const [analysisStage, setAnalysisStage] = useState("");
+  const analysisTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Editable variables (populated by AI, user can tweak)
   const [variables, setVariables] = useState<AIAnalysisResponse["variables"]>([]);
@@ -119,6 +124,28 @@ export default function NewSimulationPage() {
   async function runAnalysis() {
     setAnalyzing(true);
     setAnalysisError("");
+    setAnalysisProgress(0);
+    setAnalysisStage("Reading your scenario...");
+
+    // Animate progress through realistic stages while waiting for the API
+    const stages = [
+      { at: 800,  pct: 12, label: "Parsing company context..." },
+      { at: 2000, pct: 28, label: "Calibrating financial variables..." },
+      { at: 3500, pct: 44, label: "Modeling market dynamics..." },
+      { at: 5000, pct: 58, label: "Configuring AI agents..." },
+      { at: 6500, pct: 70, label: "Generating simulation parameters..." },
+      { at: 8000, pct: 82, label: "Validating variable ranges..." },
+      { at: 9200, pct: 91, label: "Finalizing analysis..." },
+    ];
+
+    const timers: NodeJS.Timeout[] = [];
+    stages.forEach(({ at, pct, label }) => {
+      const t = setTimeout(() => {
+        setAnalysisProgress(pct);
+        setAnalysisStage(label);
+      }, at);
+      timers.push(t);
+    });
 
     const fullContext = {
       ...context,
@@ -126,7 +153,22 @@ export default function NewSimulationPage() {
     };
 
     try {
-      const data: AIAnalysisResponse = await analyzeContext({ category, context: fullContext });
+      const raw = await analyzeContext({ category, context: fullContext });
+      // Normalise snake_case → camelCase (FastAPI returns snake_case)
+      const data: AIAnalysisResponse = {
+        variables: raw.variables ?? [],
+        agents: raw.agents ?? [],
+        assumptions: raw.assumptions ?? [],
+        successCriteria: raw.success_criteria ?? raw.successCriteria ?? "",
+        timeHorizon: raw.time_horizon ?? raw.timeHorizon ?? 12,
+        numRuns: raw.num_runs ?? raw.numRuns ?? 1000,
+      };
+      // Jump to 100% on success
+      timers.forEach(clearTimeout);
+      setAnalysisProgress(100);
+      setAnalysisStage("Analysis complete!");
+      // Small delay so user sees 100% before content renders
+      await new Promise((r) => setTimeout(r, 350));
       setAnalysis(data);
       setVariables(data.variables);
       setAgents(data.agents);
@@ -134,6 +176,9 @@ export default function NewSimulationPage() {
       setTimeHorizon(data.timeHorizon);
       toast({ title: "Analysis complete", description: `Generated ${data.variables.length} variables and ${data.agents.length} agents`, variant: "success" });
     } catch (e: any) {
+      timers.forEach(clearTimeout);
+      setAnalysisProgress(0);
+      setAnalysisStage("");
       setAnalysisError(e.message || "Failed to analyze context");
       toast({ title: "Analysis failed", description: e.message || "Check your connection and try again", variant: "error" });
     } finally {
@@ -206,10 +251,11 @@ export default function NewSimulationPage() {
         company_context: { ...context, acquisitionChannels: selectedChannels },
       };
 
-      const sim = await createSimulation({ config, user_id: "demo-user" });
+      const currentUser = getCurrentUser();
+      const sim = await createSimulation({ config, user_id: currentUser?.uid || "demo-user" });
 
-      // Auto-run the simulation
-      await runSimulation(sim.id, { num_runs: numRuns });
+      // Auto-run the simulation (long timeout — Monte Carlo can take time)
+      await runSimulationLong(sim.id, { num_runs: numRuns });
 
       toast({ title: "Simulation launched", description: `Running ${numRuns.toLocaleString()} Monte Carlo iterations...`, variant: "success" });
       router.push(`/simulations/${sim.id}`);
@@ -644,10 +690,14 @@ export default function NewSimulationPage() {
           <p className="text-xs text-white/35 mb-8">Claude is analyzing your scenario and generating a realistic simulation configuration.</p>
 
           {analyzing && (
-            <div className="surface p-12 flex flex-col items-center justify-center text-center">
-              <Loader2 className="w-8 h-8 text-white/30 animate-spin mb-4" />
-              <p className="text-sm text-white/50 mb-1">Analyzing your scenario...</p>
-              <p className="text-xs text-white/25">Building simulation variables from your company data</p>
+            <div className="surface p-10 flex flex-col items-center justify-center text-center">
+              <Sparkles className="w-6 h-6 text-violet-400/60 mb-5" />
+              <p className="text-sm text-white/70 mb-1 font-medium">Analyzing your scenario</p>
+              <p className="text-xs text-white/30 mb-6">{analysisStage}</p>
+              <div className="w-full max-w-sm mb-3">
+                <Progress value={analysisProgress} className="h-1.5" />
+              </div>
+              <p className="text-[10px] text-white/20 tracking-widest">{analysisProgress}%</p>
             </div>
           )}
 

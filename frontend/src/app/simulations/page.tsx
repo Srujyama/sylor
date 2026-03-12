@@ -49,7 +49,8 @@ function timeAgo(dateStr: string): string {
 
 export default function SimulationsPage() {
   const { toast } = useToast();
-  const [userId, setUserId] = useState("demo-user");
+  const [userId, setUserId] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [simulations, setSimulations] = useState<Simulation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,11 +60,13 @@ export default function SimulationsPage() {
   useEffect(() => {
     const unsubscribe = onAuthChange((user) => {
       if (user?.uid) setUserId(user.uid);
+      setAuthReady(true);
     });
     return () => unsubscribe();
   }, []);
 
   const fetchSimulations = useCallback(async () => {
+    if (!userId) return;
     try {
       setError(null);
       const data = await listSimulations(userId);
@@ -100,10 +103,11 @@ export default function SimulationsPage() {
   }, [userId]);
 
   useEffect(() => {
+    if (!authReady || !userId) return;
     fetchSimulations();
     const interval = setInterval(fetchSimulations, 8000);
     return () => clearInterval(interval);
-  }, [fetchSimulations]);
+  }, [authReady, userId, fetchSimulations]);
 
   async function handleDuplicate(e: React.MouseEvent, simId: string) {
     e.preventDefault();

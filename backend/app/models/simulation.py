@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Optional, Dict, Any, Literal
 from enum import Enum
 import uuid
@@ -48,6 +48,22 @@ class SimulationVariable(BaseModel):
     unit: Optional[str] = None
 
 
+# Map AI-generated agent type strings to valid AgentType enum values
+_AGENT_TYPE_FALLBACK_MAP = {
+    "momentum_trader": "trader", "value_investor": "investor", "algorithmic_trader": "trader",
+    "quant_trader": "trader", "retail_trader": "trader", "institutional_investor": "investor",
+    "portfolio_manager": "investor", "market_analyst": "market", "market_participant": "market",
+    "market_force": "market", "macro_force": "market", "macro": "market",
+    "consumer": "customer", "user": "customer", "buyer": "customer", "client": "customer",
+    "end_user": "customer", "churn_agent": "customer", "acquisition_agent": "customer",
+    "sales_agent": "customer", "regulatory": "regulator", "government": "regulator",
+    "policy_maker": "regulator", "vc_investor": "investor", "angel_investor": "investor",
+    "data": "data_stream", "signal": "data_stream", "trend_agent": "data_stream",
+    "sensor": "data_stream", "feed": "data_stream", "ligand": "molecule",
+    "protein": "molecule", "substrate": "molecule", "catalyst": "enzyme", "inhibitor": "molecule",
+}
+
+
 class AgentConfig(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
     type: AgentType
@@ -56,6 +72,32 @@ class AgentConfig(BaseModel):
     sensitivity: float = Field(ge=0, le=1, default=0.7)
     behavior_rules: List[str] = []
 
+    @field_validator("type", mode="before")
+    @classmethod
+    def coerce_agent_type(cls, v):
+        """Coerce AI-generated agent type strings to valid AgentType enum values."""
+        if isinstance(v, AgentType):
+            return v
+        s = str(v).lower().strip().replace(" ", "_").replace("-", "_")
+        # Direct match first
+        try:
+            return AgentType(s)
+        except ValueError:
+            pass
+        # Lookup in fallback map
+        if s in _AGENT_TYPE_FALLBACK_MAP:
+            return AgentType(_AGENT_TYPE_FALLBACK_MAP[s])
+        # Partial match
+        for key, val in _AGENT_TYPE_FALLBACK_MAP.items():
+            if key in s or s in key:
+                return AgentType(val)
+        # Try any AgentType whose value is a substring
+        for at in AgentType:
+            if at.value in s or s in at.value:
+                return at
+        # Default fallback
+        return AgentType.MARKET
+
 
 class SimulationConfig(BaseModel):
     name: str = Field(min_length=1, max_length=200)
@@ -63,7 +105,7 @@ class SimulationConfig(BaseModel):
     category: SimulationCategory
     variables: List[SimulationVariable]
     agents: List[AgentConfig]
-    num_runs: int = Field(ge=100, le=10000, default=1000)
+    num_runs: int = Field(ge=10, le=10000, default=1000)
     time_horizon: int = Field(ge=1, le=120, default=12)  # months
     template_id: Optional[str] = None
     uploaded_data: Optional[Dict[str, List[float]]] = None  # column name → values

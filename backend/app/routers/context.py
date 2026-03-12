@@ -4,12 +4,49 @@ Takes a user's company/scenario context and uses Claude to generate
 realistic simulation variables, agent configs, and assumptions.
 """
 import json
+import re
 import anthropic
 from fastapi import APIRouter, HTTPException
 from app.config import settings
 from app.models.simulation import CompanyContext, ContextAnalysisResponse
 
 router = APIRouter(prefix="/api/context", tags=["context"])
+
+
+def _extract_json(text: str) -> dict:
+    """
+    Robustly extract a JSON object from Claude's response.
+    Handles: markdown code fences, trailing commas, JS-style comments.
+    """
+    # 1. Strip markdown code fences if present
+    fenced = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
+    if fenced:
+        text = fenced.group(1).strip()
+
+    # 2. Find the outermost JSON object
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start < 0 or end <= start:
+        raise ValueError("No JSON object found in response")
+    raw = text[start:end]
+
+    # 3. Try direct parse first (fast path)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # 4. Remove single-line // comments
+    raw = re.sub(r"//[^\n]*", "", raw)
+
+    # 5. Remove trailing commas before } or ]
+    raw = re.sub(r",\s*([}\]])", r"\1", raw)
+
+    # 6. Try again
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Could not parse JSON from AI response: {e}") from e
 
 
 def _build_prompt(category: str, context: dict) -> str:
@@ -217,21 +254,15 @@ async def analyze_context(body: CompanyContext):
         )
 
         text = response.content[0].text
-        # Extract JSON from response
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start < 0 or end <= start:
-            raise ValueError("No JSON found in response")
-
-        data = json.loads(text[start:end])
+        data = _extract_json(text)
 
         return ContextAnalysisResponse(
             variables=data.get("variables", []),
             agents=data.get("agents", []),
             assumptions=data.get("assumptions", []),
             success_criteria=data.get("success_criteria", ""),
-            time_horizon=data.get("time_horizon", 12),
-            num_runs=data.get("num_runs", 1000),
+            time_horizon=int(data.get("time_horizon", 12)),
+            num_runs=int(data.get("num_runs", 1000)),
         )
 
     except anthropic.APIError as e:

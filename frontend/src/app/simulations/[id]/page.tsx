@@ -2,7 +2,7 @@
 
 export const dynamic = 'force-dynamic';
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +43,9 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
   const [variableOverrides, setVariableOverrides] = useState<Record<string, number>>({});
   const [isRerunning, setIsRerunning] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [runProgress, setRunProgress] = useState(0);
+  const [runStage, setRunStage] = useState("Initializing...");
+  const runTimersRef = useRef<NodeJS.Timeout[]>([]);
 
   function handleExportCSV() {
     if (!results) return;
@@ -109,17 +112,43 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
           setError(sim.error || "Simulation failed");
           setLoading(false);
         } else if (sim.status === "running") {
+          // Animate progress bar while polling
+          const runStages = [
+            { at: 600,   pct: 8,  label: "Spawning agents..." },
+            { at: 2000,  pct: 20, label: "Running Monte Carlo iterations..." },
+            { at: 4000,  pct: 38, label: "Simulating market dynamics..." },
+            { at: 6000,  pct: 52, label: "Computing outcome distribution..." },
+            { at: 9000,  pct: 65, label: "Aggregating percentile bands..." },
+            { at: 12000, pct: 76, label: "Generating AI insights..." },
+            { at: 16000, pct: 85, label: "Calculating risk factors..." },
+            { at: 20000, pct: 92, label: "Finalizing results..." },
+          ];
+          const timers: NodeJS.Timeout[] = [];
+          runStages.forEach(({ at, pct, label }) => {
+            const t = setTimeout(() => {
+              setRunProgress(pct);
+              setRunStage(label);
+            }, at);
+            timers.push(t);
+          });
+          runTimersRef.current = timers;
+
           // Poll for completion
           interval = setInterval(async () => {
             try {
               const r = await fetch(`${getApiUrl()}/api/simulations/${params.id}/results`);
               const data = await r.json();
               if (data.status === "completed") {
+                runTimersRef.current.forEach(clearTimeout);
+                setRunProgress(100);
+                setRunStage("Simulation complete!");
+                await new Promise((r) => setTimeout(r, 300));
                 setResults(data.results);
                 setSimulation((prev: any) => ({ ...prev, status: "completed", results: data.results }));
                 setLoading(false);
                 if (interval) clearInterval(interval);
               } else if (data.status === "failed") {
+                runTimersRef.current.forEach(clearTimeout);
                 setError("Simulation failed");
                 setLoading(false);
                 if (interval) clearInterval(interval);
@@ -134,11 +163,19 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
     }
 
     fetchData();
-    return () => { if (interval) clearInterval(interval); };
+    return () => {
+      if (interval) clearInterval(interval);
+      runTimersRef.current.forEach(clearTimeout);
+    };
   }, [params.id]);
+
+  const [rerunProgress, setRerunProgress] = useState(0);
+  const [rerunStage, setRerunStage] = useState("");
 
   async function handleRerun() {
     setIsRerunning(true);
+    setRerunProgress(0);
+    setRerunStage("Starting rerun...");
     try {
       await fetch(`${getApiUrl()}/api/simulations/${params.id}/run`, {
         method: "POST",
@@ -146,17 +183,35 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
         body: JSON.stringify({ num_runs: simulation?.config?.num_runs || 1000, variable_overrides: variableOverrides }),
       });
       toast({ title: "Rerun started", description: "Running simulation with updated parameters..." });
-      // Poll for new results
+
+      // Animate progress while polling
+      const rerunStages = [
+        { at: 600,   pct: 15, label: "Applying variable overrides..." },
+        { at: 2500,  pct: 35, label: "Running Monte Carlo scenarios..." },
+        { at: 5000,  pct: 55, label: "Computing new distributions..." },
+        { at: 8000,  pct: 72, label: "Generating updated insights..." },
+        { at: 12000, pct: 88, label: "Finalizing results..." },
+      ];
+      const timers: NodeJS.Timeout[] = [];
+      rerunStages.forEach(({ at, pct, label }) => {
+        const t = setTimeout(() => { setRerunProgress(pct); setRerunStage(label); }, at);
+        timers.push(t);
+      });
+
       const poll = setInterval(async () => {
         const r = await fetch(`${getApiUrl()}/api/simulations/${params.id}/results`);
         const data = await r.json();
         if (data.status === "completed") {
+          timers.forEach(clearTimeout);
+          setRerunProgress(100);
+          setRerunStage("Done!");
           setResults(data.results);
           setSimulation((prev: any) => ({ ...prev, status: "completed", results: data.results }));
           setIsRerunning(false);
           clearInterval(poll);
           toast({ title: "Rerun complete", description: `Success probability: ${Math.round(data.results.success_probability)}%`, variant: "success" });
         } else if (data.status === "failed") {
+          timers.forEach(clearTimeout);
           setIsRerunning(false);
           clearInterval(poll);
           toast({ title: "Rerun failed", description: "The simulation encountered an error", variant: "error" });
@@ -201,10 +256,12 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
           ))}
         </div>
         <div className="flex items-center justify-center py-20">
-          <div className="text-center">
-            <Loader2 className="w-8 h-8 text-white/20 animate-spin mx-auto mb-3" />
-            <p className="text-sm text-white/40">Running simulation...</p>
-            <p className="text-xs text-white/20 mt-1">Executing Monte Carlo scenarios</p>
+          <div className="text-center w-full max-w-sm">
+            <Zap className="w-6 h-6 text-violet-400/60 mx-auto mb-5" />
+            <p className="text-sm text-white/70 font-medium mb-1">Running simulation</p>
+            <p className="text-xs text-white/30 mb-6">{runStage}</p>
+            <Progress value={runProgress} className="h-1.5 mb-3" />
+            <p className="text-[10px] text-white/20 tracking-widest">{runProgress}%</p>
           </div>
         </div>
       </div>
@@ -522,6 +579,15 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                   <><Zap className="w-4 h-4" /> Rerun Simulation</>
                 )}
               </Button>
+              {isRerunning && (
+                <div className="mt-4">
+                  <div className="flex justify-between text-[10px] text-white/30 mb-1.5">
+                    <span>{rerunStage}</span>
+                    <span>{rerunProgress}%</span>
+                  </div>
+                  <Progress value={rerunProgress} className="h-1" />
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

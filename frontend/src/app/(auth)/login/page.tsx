@@ -2,14 +2,14 @@
 
 export const dynamic = 'force-dynamic';
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Activity, ArrowLeft, Loader2 } from "lucide-react";
-import { signInWithEmail, signInWithGoogle } from "@/lib/firebase/auth";
+import { signInWithEmail, signInWithGoogle, onAuthChange } from "@/lib/firebase/auth";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -19,16 +19,26 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const router = useRouter();
 
+  // Once Firebase confirms auth, navigate to dashboard
+  useEffect(() => {
+    if (!loading && !googleLoading) return;
+    const unsubscribe = onAuthChange((user) => {
+      if (user) {
+        router.push("/dashboard");
+      }
+    });
+    return () => unsubscribe();
+  }, [loading, googleLoading, router]);
+
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError("");
     try {
       await signInWithEmail(email, password);
-      router.push("/dashboard");
+      // onAuthChange listener above will redirect once Firebase confirms the user
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Sign in failed";
-      // Make Firebase error messages friendlier
       setError(
         msg.includes("invalid-credential") || msg.includes("wrong-password")
           ? "Invalid email or password"
@@ -45,7 +55,7 @@ export default function LoginPage() {
     setError("");
     try {
       await signInWithGoogle();
-      router.push("/dashboard");
+      // onAuthChange listener above will redirect once Firebase confirms the user
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Google sign-in failed";
       setError(msg.includes("popup-closed") ? "Sign-in popup was closed" : msg);
