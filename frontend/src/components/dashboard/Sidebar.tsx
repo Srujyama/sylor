@@ -4,14 +4,17 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard, Plus, Layers, LayoutTemplate, BookOpen, Settings, LogOut,
-  BarChart3, Search,
+  BarChart3, Search, Network, FolderKanban, FileText, MessageSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logOut } from "@/lib/firebase/auth";
 
 const navItems = [
   { label: "dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { label: "projects", href: "/projects", icon: FolderKanban },
   { label: "simulations", href: "/simulations", icon: Layers },
+  { label: "knowledge graphs", href: "/graphs", icon: Network },
+  { label: "reports", href: "/reports", icon: FileText },
   { label: "analytics", href: "/analytics", icon: BarChart3 },
   { label: "templates", href: "/templates", icon: LayoutTemplate },
   { label: "docs", href: "/docs", icon: BookOpen },

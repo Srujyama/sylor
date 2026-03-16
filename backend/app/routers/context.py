@@ -13,87 +13,103 @@ from app.models.simulation import CompanyContext, ContextAnalysisResponse
 router = APIRouter(prefix="/api/context", tags=["context"])
 
 
+def _repair_truncated_json(text: str) -> str:
+    """
+    Attempt to repair a truncated JSON string by:
+    1. Closing any open string literal
+    2. Closing open arrays/objects in the right order
+    3. Stripping the last incomplete key-value pair before closing
+    """
+    s = text.rstrip()
+
+    # Track structure using a stack
+    stack = []        # 'o' = object, 'a' = array
+    in_string = False
+    escape_next = False
+
+    for ch in s:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            stack.append('o')
+        elif ch == '[':
+            stack.append('a')
+        elif ch in ']}':
+            if stack:
+                stack.pop()
+
+    # If we're mid-string, close it
+    if in_string:
+        s += '"'
+
+    # Remove trailing incomplete item (e.g. `, "key": ` or `, {` )
+    s = re.sub(r',\s*"[^"]*"?\s*:\s*[^,\}\]]*$', '', s)
+    s = re.sub(r',\s*\{[^}]*$', '', s)
+    s = re.sub(r',\s*"[^"]*$', '', s)
+
+    # Strip trailing comma
+    s = re.sub(r',\s*$', '', s)
+
+    # Close open structures in reverse order
+    for kind in reversed(stack):
+        s += ']' if kind == 'a' else '}'
+
+    return s
+
+
 def _extract_json(text: str) -> dict:
     """
     Robustly extract a JSON object from Claude's response.
     Handles: markdown code fences, trailing commas, JS comments,
-    unescaped control characters, and truncated responses.
+    control characters, and truncated responses.
     """
-    original = text
-
-    # 1. Strip markdown code fences if present (```json ... ``` or ``` ... ```)
+    # 1. Strip markdown code fences
     fenced = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
     if fenced:
         text = fenced.group(1).strip()
 
-    # 2. Find the outermost { ... } — use brace counting to get the real end
+    # 2. Isolate the JSON object (everything from first { to last })
     start = text.find("{")
     if start < 0:
         raise ValueError("No JSON object found in response")
-
-    depth = 0
-    in_string = False
-    escape_next = False
-    end = -1
-    for i, ch in enumerate(text[start:], start):
-        if escape_next:
-            escape_next = False
-            continue
-        if ch == "\\" and in_string:
-            escape_next = True
-            continue
-        if ch == '"' and not escape_next:
-            in_string = not in_string
-        if not in_string:
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    end = i + 1
-                    break
-
-    if end < 0:
-        # Truncated — try to recover with rfind as fallback
-        end = text.rfind("}") + 1
-        if end <= start:
-            raise ValueError("No complete JSON object found in response")
-
+    end = text.rfind("}") + 1
+    if end <= start:
+        raise ValueError("No complete JSON object found in response")
     raw = text[start:end]
 
-    # 3. Fast path — try direct parse
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-
-    # 4. Clean up common Claude quirks:
-    # a) Remove // line comments
-    raw = re.sub(r"//[^\n\"]*", "", raw)
+    # 3. Standard cleanups
+    # a) Remove // line comments (only outside strings — simple heuristic)
+    raw = re.sub(r'(?<!["\w])//[^\n]*', '', raw)
     # b) Remove trailing commas before } or ]
-    raw = re.sub(r",(\s*[}\]])", r"\1", raw)
-    # c) Replace unescaped control characters inside strings
-    raw = re.sub(r'[\x00-\x1f\x7f]', ' ', raw)
+    raw = re.sub(r',(\s*[}\]])', r'\1', raw)
+    # c) Replace bare control characters (real newlines/tabs inside strings)
+    #    Only replace inside string literals
+    def fix_control_chars(m):
+        s = m.group(0)
+        s = s.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+        return s
+    raw = re.sub(r'"(?:[^"\\]|\\.)*"', fix_control_chars, raw, flags=re.DOTALL)
 
+    # 4. Fast path
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         pass
 
-    # 5. Last resort: strip everything after the last complete top-level key-value
-    # by progressively truncating until we can close the object
-    stripped = raw.rstrip()
-    # Remove any incomplete last item
-    for pattern in [r',\s*\{[^}]*$', r',\s*"[^"]*$', r',\s*\[[^\]]*$']:
-        stripped = re.sub(pattern, '', stripped)
-    # Close open arrays/objects
-    open_b = stripped.count('[') - stripped.count(']')
-    open_c = stripped.count('{') - stripped.count('}')
-    stripped += ']' * max(0, open_b) + '}' * max(0, open_c)
-    stripped = re.sub(r',(\s*[}\]])', r'\1', stripped)
-
+    # 5. Truncation recovery — the response was cut off at max_tokens
+    repaired = _repair_truncated_json(raw)
+    repaired = re.sub(r',(\s*[}\]])', r'\1', repaired)
     try:
-        return json.loads(stripped)
+        return json.loads(repaired)
     except json.JSONDecodeError as e:
         raise ValueError(f"Could not parse JSON from AI response: {e}") from e
 
@@ -301,12 +317,13 @@ async def analyze_context(body: CompanyContext):
         text_chunks: list[str] = []
         async with client.messages.stream(
             model="claude-sonnet-4-6",
-            max_tokens=4096,
+            max_tokens=8000,  # Enough for 25 variables with full reasoning
             system=(
                 "You are a simulation configuration generator. "
                 "You MUST respond with ONLY a single valid JSON object — "
-                "no markdown, no code fences, no comments, no explanation. "
-                "The JSON must be syntactically valid and complete."
+                "no markdown, no code fences, no comments, no explanation before or after. "
+                "The JSON must be syntactically valid and COMPLETE — never truncate. "
+                "Keep all 'reasoning' field values under 15 words to stay within token limits."
             ),
             messages=[{"role": "user", "content": prompt}],
         ) as stream:

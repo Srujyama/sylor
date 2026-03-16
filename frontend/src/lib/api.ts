@@ -210,6 +210,214 @@ export async function parseUpload(file: File) {
   return res.json();
 }
 
+// ─── Projects (MiroFish-inspired unified pipeline) ────────
+
+export async function createProject(name: string, category: string = "startup") {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/projects`, {
+    method: "POST",
+    body: JSON.stringify({ name, category }),
+  });
+  return res.json();
+}
+
+export async function listProjects() {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/projects`);
+  return res.json();
+}
+
+export async function getProject(projectId: string) {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/projects/${projectId}`);
+  return res.json();
+}
+
+export async function deleteProject(projectId: string) {
+  await fetchWithRetry(`${getApiUrl()}/api/projects/${projectId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function uploadDocuments(projectId: string, files: File[]) {
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file));
+
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/projects/${projectId}/upload`,
+    {
+      method: "POST",
+      body: formData,
+      headers: {}, // Let browser set content-type with boundary
+      timeout: 60000,
+    }
+  );
+  return res.json();
+}
+
+export async function buildKnowledgeGraph(projectId: string) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/projects/${projectId}/build-graph`,
+    {
+      method: "POST",
+      timeout: 300000, // Graph building can take several minutes
+      retries: 0,
+    }
+  );
+  return res.json();
+}
+
+export async function generateProfiles(
+  projectId: string,
+  opts?: { use_llm?: boolean; max_profiles?: number }
+) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/projects/${projectId}/generate-profiles`,
+    {
+      method: "POST",
+      body: JSON.stringify(opts || { use_llm: true, max_profiles: 20 }),
+      timeout: 180000,
+      retries: 0,
+    }
+  );
+  return res.json();
+}
+
+export async function getProfiles(projectId: string) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/projects/${projectId}/profiles`
+  );
+  return res.json();
+}
+
+export async function generateReport(projectId: string) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/projects/${projectId}/generate-report`,
+    {
+      method: "POST",
+      timeout: 300000,
+      retries: 0,
+    }
+  );
+  return res.json();
+}
+
+export async function chatWithReport(projectId: string, message: string) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/projects/${projectId}/chat`,
+    {
+      method: "POST",
+      body: JSON.stringify({ message }),
+      timeout: 60000,
+    }
+  );
+  return res.json();
+}
+
+export async function getTaskStatus(taskId: string) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/projects/tasks/${taskId}`
+  );
+  return res.json();
+}
+
+// ─── Knowledge Graphs ─────────────────────────────────────
+
+export async function listGraphs() {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/graphs`);
+  return res.json();
+}
+
+export async function getGraph(graphId: string) {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/graphs/${graphId}`);
+  return res.json();
+}
+
+export async function getGraphNodes(graphId: string, entityType?: string) {
+  const params = entityType ? `?entity_type=${entityType}` : "";
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/graphs/${graphId}/nodes${params}`
+  );
+  return res.json();
+}
+
+export async function getGraphEdges(graphId: string) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/graphs/${graphId}/edges`
+  );
+  return res.json();
+}
+
+export async function searchGraph(graphId: string, query: string, limit: number = 10) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/graphs/${graphId}/search`,
+    {
+      method: "POST",
+      body: JSON.stringify({ query, limit }),
+    }
+  );
+  return res.json();
+}
+
+// ─── Reports ──────────────────────────────────────────────
+
+export async function listReports(simulationId?: string) {
+  const params = simulationId ? `?simulation_id=${simulationId}` : "";
+  const res = await fetchWithRetry(`${getApiUrl()}/api/reports${params}`);
+  return res.json();
+}
+
+export async function getReport(reportId: string) {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/reports/${reportId}`);
+  return res.json();
+}
+
+export async function getReportProgress(reportId: string) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/reports/${reportId}/progress`
+  );
+  return res.json();
+}
+
+export async function getReportSections(reportId: string) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/reports/${reportId}/sections`
+  );
+  return res.json();
+}
+
+export async function generateReportSync(data: {
+  simulation_id: string;
+  simulation_data: any;
+  category: string;
+  graph_id?: string;
+}) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/reports/generate-sync`,
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+      timeout: 300000,
+      retries: 0,
+    }
+  );
+  return res.json();
+}
+
+export async function chatWithReportDirect(
+  reportId: string,
+  message: string,
+  simulationData?: any
+) {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/reports/chat`, {
+    method: "POST",
+    body: JSON.stringify({
+      report_id: reportId,
+      message,
+      simulation_data: simulationData,
+    }),
+    timeout: 60000,
+  });
+  return res.json();
+}
+
 // ─── Export helpers ───────────────────────────────────────
 
 export function exportToCSV(data: any[], filename: string) {
