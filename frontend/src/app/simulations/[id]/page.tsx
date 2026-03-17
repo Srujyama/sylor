@@ -367,7 +367,7 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
               <Download className="w-4 h-4" /> Export
             </Button>
             {showExportMenu && (
-              <div className="absolute right-0 top-full mt-1 z-50 bg-[#111] border border-white/10 py-1 min-w-[160px]">
+              <div className="absolute right-0 top-full mt-1 z-50 bg-[var(--surface-bg)] border border-white/10 py-1 min-w-[160px]">
                 <button onClick={handleExportCSV} className="w-full text-left px-3 py-2 text-xs text-white/60 hover:bg-white/[0.05] hover:text-white flex items-center gap-2">
                   <FileSpreadsheet className="w-3 h-3" /> Export as CSV
                 </button>
@@ -432,12 +432,12 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                       <stop offset="95%" stopColor="#06b6d4" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                   <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false}
                     tickFormatter={(v) => labels.formatPrimary(v)} />
                   <Tooltip
-                    contentStyle={{ background: "rgba(0,0,0,0.85)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "0", fontSize: 12, fontFamily: "inherit" }}
+                    contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--chart-tooltip-border)", borderRadius: "0", fontSize: 12, fontFamily: "inherit" }}
                     formatter={(v: number, name: string) => [labels.formatPrimary(v), name === "p90" ? "Best 10%" : name === "p50" ? "Median" : "Worst 10%"]}
                   />
                   <Area type="monotone" dataKey="p90" stroke="#8b5cf6" strokeWidth={1.5} fill="url(#p90grad)" strokeDasharray="4 2" />
@@ -465,11 +465,11 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
               <CardContent>
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={outcomeDistribution} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
                     <XAxis dataKey="range" tick={{ fontSize: 9, fill: "#6b7280" }} axisLine={false} tickLine={false} />
                     <YAxis tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
                     <Tooltip
-                      contentStyle={{ background: "rgba(0,0,0,0.85)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "0", fontSize: 12 }}
+                      contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--chart-tooltip-border)", borderRadius: "0", fontSize: 12 }}
                       formatter={(v: number) => [`${v}%`, "Probability"]}
                     />
                     <Bar dataKey="probability" radius={[2, 2, 0, 0]}>
@@ -492,11 +492,11 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
               <CardContent>
                 <ResponsiveContainer width="100%" height={220}>
                   <LineChart data={timelineData} margin={{ top: 5, right: 20, left: -20, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                     <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false} />
                     <YAxis tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false}
                       tickFormatter={(v) => labels.formatSecondary(v)} />
-                    <Tooltip contentStyle={{ background: "rgba(0,0,0,0.85)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "0", fontSize: 12 }} />
+                    <Tooltip contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--chart-tooltip-border)", borderRadius: "0", fontSize: 12 }} />
                     <Line type="monotone" dataKey="marketShare" stroke="#22c55e" strokeWidth={2} dot={false} name={tertiaryLabel} />
                   </LineChart>
                 </ResponsiveContainer>
@@ -612,7 +612,7 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                         ))}
                       </Pie>
                       <Legend wrapperStyle={{ fontSize: 12, color: "#6b7280" }} />
-                      <Tooltip contentStyle={{ background: "rgba(0,0,0,0.85)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "0", fontSize: 12 }} />
+                      <Tooltip contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--chart-tooltip-border)", borderRadius: "0", fontSize: 12 }} />
                     </PieChart>
                   </ResponsiveContainer>
                 ) : (
@@ -655,10 +655,10 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                       <stop offset="95%" stopColor="#06b6d4" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
                   <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={{ background: "rgba(0,0,0,0.85)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "0", fontSize: 12 }} />
+                  <Tooltip contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--chart-tooltip-border)", borderRadius: "0", fontSize: 12 }} />
                   <Area type="monotone" dataKey="customers" stroke="#06b6d4" strokeWidth={2} fill="url(#custGrad)" name={secondaryLabel} />
                 </AreaChart>
               </ResponsiveContainer>

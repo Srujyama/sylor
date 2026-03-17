@@ -111,7 +111,7 @@ export function CommandPalette() {
         className="absolute top-[20%] left-1/2 -translate-x-1/2 w-full max-w-lg"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="bg-[#111] border border-white/10 shadow-2xl">
+        <div className="bg-[var(--surface-bg)] border border-white/10 shadow-2xl">
           {/* Search input */}
           <div className="flex items-center gap-3 px-4 py-3 border-b border-white/[0.06]">
             <Search className="w-4 h-4 text-white/25 shrink-0" />

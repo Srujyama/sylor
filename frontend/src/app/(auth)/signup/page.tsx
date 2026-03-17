@@ -83,7 +83,7 @@ export default function SignupPage() {
         <div className="glass-card rounded-2xl p-8">
           <div className="flex items-center gap-2 mb-8">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center">
-              <Activity className="w-5 h-5 text-white" />
+              <Activity className="w-5 h-5 text-[#ffffff]" />
             </div>
             <span className="text-xl font-bold gradient-text">SimWorld</span>
           </div>

@@ -221,23 +221,24 @@ export default function DashboardPage() {
           {categoryData.length > 0 ? (
             <ResponsiveContainer width="100%" height={180}>
               <BarChart data={categoryData} margin={{ top: 5, right: 0, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                <XAxis dataKey="category" tick={{ fontSize: 10, fill: "rgba(255,255,255,0.25)", fontFamily: "inherit" }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10, fill: "rgba(255,255,255,0.25)", fontFamily: "inherit" }} axisLine={false} tickLine={false} allowDecimals={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
+                <XAxis dataKey="category" tick={{ fontSize: 10, fill: "var(--chart-text)", fontFamily: "inherit" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: "var(--chart-text)", fontFamily: "inherit" }} axisLine={false} tickLine={false} allowDecimals={false} />
                 <Tooltip
                   contentStyle={{
-                    background: "#111",
-                    border: "1px solid rgba(255,255,255,0.1)",
+                    background: "var(--chart-tooltip-bg)",
+                    border: "1px solid var(--chart-tooltip-border)",
                     borderRadius: "0",
                     fontSize: 11,
                     fontFamily: "inherit",
+                    color: "var(--page-text)",
                   }}
-                  labelStyle={{ color: "rgba(255,255,255,0.7)" }}
-                  itemStyle={{ color: "rgba(255,255,255,0.5)" }}
+                  labelStyle={{ color: "var(--chart-text-strong)" }}
+                  itemStyle={{ color: "var(--chart-text-strong)" }}
                 />
-                <Bar dataKey="count" name="simulations" fill="rgba(255,255,255,0.15)" stroke="rgba(255,255,255,0.3)" strokeWidth={1}>
+                <Bar dataKey="count" name="simulations" fill="var(--chart-grid)" stroke="var(--chart-text)" strokeWidth={1}>
                   {categoryData.map((_, i) => (
-                    <Cell key={i} fill={i === 0 ? "rgba(74,222,128,0.2)" : "rgba(255,255,255,0.08)"} stroke={i === 0 ? "rgba(74,222,128,0.5)" : "rgba(255,255,255,0.15)"} />
+                    <Cell key={i} fill={i === 0 ? "rgba(74,222,128,0.2)" : "var(--chart-grid)"} stroke={i === 0 ? "rgba(74,222,128,0.5)" : "var(--chart-text)"} />
                   ))}
                 </Bar>
               </BarChart>

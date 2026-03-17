@@ -144,13 +144,13 @@ export default function ComparePage({ params }: { params: { id: string } }) {
           <CardContent>
             <ResponsiveContainer width="100%" height={280}>
               <RadarChart data={compareData}>
-                <PolarGrid stroke="rgba(255,255,255,0.1)" />
+                <PolarGrid stroke="var(--chart-tooltip-border)" />
                 <PolarAngleAxis dataKey="name" tick={{ fontSize: 11, fill: "#6b7280" }} />
                 {scenarios.map((s) => (
                   <Radar key={s.name} name={s.name} dataKey={s.name} stroke={s.color} fill={s.color} fillOpacity={0.1} strokeWidth={2} />
                 ))}
                 <Legend wrapperStyle={{ fontSize: 11, color: "#6b7280" }} />
-                <Tooltip contentStyle={{ background: "rgba(0,0,0,0.85)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "10px", fontSize: 12 }} />
+                <Tooltip contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--chart-tooltip-border)", borderRadius: "10px", fontSize: 12 }} />
               </RadarChart>
             </ResponsiveContainer>
           </CardContent>
@@ -171,10 +171,10 @@ export default function ComparePage({ params }: { params: { id: string } }) {
                 ]}
                 margin={{ top: 5, right: 20, left: -20, bottom: 5 }}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
                 <XAxis dataKey="name" tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
-                <Tooltip contentStyle={{ background: "rgba(0,0,0,0.85)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "10px", fontSize: 12 }} formatter={(v: number) => [`${v}%`]} />
+                <Tooltip contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--chart-tooltip-border)", borderRadius: "10px", fontSize: 12 }} formatter={(v: number) => [`${v}%`]} />
                 <Bar dataKey="value" radius={[6, 6, 0, 0]}>
                   {[{ fill: "#8b5cf6" }, { fill: "#06b6d4" }, { fill: "#22c55e" }].map((entry, i) => (
                     <rect key={i} fill={entry.fill} />

@@ -11,6 +11,14 @@
   /* ── Dark theme (default) ───────────────────────────────── */
   :root,
   .dark {
+    /*
+     * Tailwind white/black semantic override.
+     * In dark mode: "white" = actual white, "black" = actual black.
+     * These are RGB triplets consumed as rgb(var(--tw-white) / <alpha>).
+     */
+    --tw-white: 255 255 255;
+    --tw-black: 0 0 0;
+
     --background: 0 0% 4%;
     --foreground: 0 0% 93%;
     --muted: 0 0% 8%;
@@ -71,10 +79,30 @@
     --glass-card-border: rgba(255, 255, 255, 0.1);
     --grid-line: rgba(255, 255, 255, 0.025);
     --dot-grid: rgba(255, 255, 255, 0.07);
+
+    /* Chart colors (for Recharts inline props) */
+    --chart-grid: rgba(255, 255, 255, 0.05);
+    --chart-text: rgba(255, 255, 255, 0.25);
+    --chart-text-strong: rgba(255, 255, 255, 0.5);
+    --chart-tooltip-bg: #111111;
+    --chart-tooltip-border: rgba(255, 255, 255, 0.1);
   }
 
   /* ── Light theme ────────────────────────────────────────── */
   .light {
+    /*
+     * In light mode: "white" = near-black, "black" = near-white.
+     * This flips ALL existing `text-white`, `bg-white/[0.06]`,
+     * `border-white/10` etc. to work on a light background.
+     *
+     * text-white       → dark text on light bg
+     * text-white/30    → muted dark text
+     * bg-white/[0.06]  → subtle dark tint on light bg
+     * border-white/10  → subtle dark border
+     */
+    --tw-white: 23 23 23;
+    --tw-black: 255 255 255;
+
     --background: 0 0% 98%;
     --foreground: 0 0% 9%;
     --muted: 0 0% 95%;
@@ -134,6 +162,13 @@
     --glass-card-border: rgba(0, 0, 0, 0.1);
     --grid-line: rgba(0, 0, 0, 0.04);
     --dot-grid: rgba(0, 0, 0, 0.06);
+
+    /* Chart colors */
+    --chart-grid: rgba(0, 0, 0, 0.08);
+    --chart-text: rgba(0, 0, 0, 0.4);
+    --chart-text-strong: rgba(0, 0, 0, 0.6);
+    --chart-tooltip-bg: #ffffff;
+    --chart-tooltip-border: rgba(0, 0, 0, 0.1);
   }
 }
 

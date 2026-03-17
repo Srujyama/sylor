@@ -10,6 +10,22 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        /*
+         * THEME-AWARE WHITE/BLACK
+         *
+         * This codebase uses `text-white`, `bg-white/[0.06]`, `border-white/10`
+         * everywhere to mean "foreground", "subtle surface", "subtle border"
+         * — NOT literal white.
+         *
+         * By pointing Tailwind's `white` at a CSS variable that flips between
+         * actual white (dark mode) and near-black (light mode), ALL ~800
+         * existing classes work in both themes without individual edits.
+         *
+         * `black` is the inverse: dark in dark-mode, light in light-mode.
+         */
+        white: "rgb(var(--tw-white) / <alpha-value>)",
+        black: "rgb(var(--tw-black) / <alpha-value>)",
+
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",

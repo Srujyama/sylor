@@ -14,9 +14,9 @@ const buttonVariants = cva(
         // Ghost = transparent, dim border
         ghost:
           "bg-transparent text-[var(--btn-ghost-text)] border border-[var(--btn-ghost-border)] hover:bg-[var(--btn-ghost-hover-bg)] hover:text-[var(--page-text)]",
-        // Destructive
+        // Destructive — uses literal white text on red bg
         destructive:
-          "bg-red-500 text-white border border-red-500 hover:bg-red-400",
+          "bg-red-500 text-[#ffffff] border border-red-500 hover:bg-red-400",
         // Outline — alias for ghost
         outline:
           "bg-transparent text-[var(--btn-ghost-text)] border border-[var(--btn-ghost-border)] hover:bg-[var(--btn-ghost-hover-bg)] hover:text-[var(--page-text)]",

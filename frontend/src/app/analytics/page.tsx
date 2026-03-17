@@ -213,10 +213,10 @@ export default function AnalyticsPage() {
                     <stop offset="95%" stopColor="rgba(139,92,246,0)" />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "rgba(255,255,255,0.25)" }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10, fill: "rgba(255,255,255,0.25)" }} axisLine={false} tickLine={false} allowDecimals={false} />
-                <Tooltip contentStyle={{ background: "#111", border: "1px solid rgba(255,255,255,0.1)", fontSize: 11 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--chart-text)" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: "var(--chart-text)" }} axisLine={false} tickLine={false} allowDecimals={false} />
+                <Tooltip contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--chart-tooltip-border)", fontSize: 11 }} />
                 <Area type="monotone" dataKey="cumulative" stroke="rgba(139,92,246,0.7)" strokeWidth={2} fill="url(#growthGrad)" name="Total" />
               </AreaChart>
             </ResponsiveContainer>
@@ -233,10 +233,10 @@ export default function AnalyticsPage() {
           {successByCategory.length > 0 ? (
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={successByCategory} layout="vertical" margin={{ top: 5, right: 10, left: 10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 10, fill: "rgba(255,255,255,0.25)" }} axisLine={false} tickLine={false} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
-                <YAxis type="category" dataKey="category" tick={{ fontSize: 10, fill: "rgba(255,255,255,0.4)" }} axisLine={false} tickLine={false} width={70} />
-                <Tooltip contentStyle={{ background: "#111", border: "1px solid rgba(255,255,255,0.1)", fontSize: 11 }} formatter={(v: number) => [`${v}%`, "Avg Success"]} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 10, fill: "var(--chart-text)" }} axisLine={false} tickLine={false} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
+                <YAxis type="category" dataKey="category" tick={{ fontSize: 10, fill: "var(--chart-text-strong)" }} axisLine={false} tickLine={false} width={70} />
+                <Tooltip contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--chart-tooltip-border)", fontSize: 11 }} formatter={(v: number) => [`${v}%`, "Avg Success"]} />
                 <Bar dataKey="avgSuccess" radius={[0, 2, 2, 0]}>
                   {successByCategory.map((entry, i) => (
                     <Cell key={i} fill={entry.fill} />
@@ -265,8 +265,8 @@ export default function AnalyticsPage() {
                     <Cell key={i} fill={entry.fill} />
                   ))}
                 </Pie>
-                <Tooltip contentStyle={{ background: "#111", border: "1px solid rgba(255,255,255,0.1)", fontSize: 11 }} />
-                <Legend wrapperStyle={{ fontSize: 10, color: "rgba(255,255,255,0.4)" }} />
+                <Tooltip contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--chart-tooltip-border)", fontSize: 11 }} />
+                <Legend wrapperStyle={{ fontSize: 10, color: "var(--chart-text-strong)" }} />
               </PieChart>
             </ResponsiveContainer>
           ) : (
@@ -280,10 +280,10 @@ export default function AnalyticsPage() {
           {completed.length > 0 ? (
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={histogramData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false} />
-                <XAxis dataKey="range" tick={{ fontSize: 9, fill: "rgba(255,255,255,0.25)" }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10, fill: "rgba(255,255,255,0.25)" }} axisLine={false} tickLine={false} allowDecimals={false} />
-                <Tooltip contentStyle={{ background: "#111", border: "1px solid rgba(255,255,255,0.1)", fontSize: 11 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
+                <XAxis dataKey="range" tick={{ fontSize: 9, fill: "var(--chart-text)" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: "var(--chart-text)" }} axisLine={false} tickLine={false} allowDecimals={false} />
+                <Tooltip contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--chart-tooltip-border)", fontSize: 11 }} />
                 <Bar dataKey="count" fill="rgba(74,222,128,0.3)" stroke="rgba(74,222,128,0.6)" strokeWidth={1} radius={[2, 2, 0, 0]} name="Simulations" />
               </BarChart>
             </ResponsiveContainer>

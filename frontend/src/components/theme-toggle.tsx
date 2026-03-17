@@ -43,7 +43,7 @@ export function ThemeTogglePill({ className = "" }: { className?: string }) {
         className={`absolute top-0.5 flex items-center justify-center w-5 h-5 rounded-full transition-all duration-200 ${
           theme === "dark"
             ? "left-[1.375rem] bg-white/20"
-            : "left-0.5 bg-white shadow-sm"
+            : "left-0.5 bg-[#ffffff] shadow-sm"
         }`}
       >
         {theme === "dark" ? (
