@@ -42,7 +42,7 @@ export function HowItWorks() {
           {steps.map((step) => (
             <div
               key={step.number}
-              className="bg-[#0a0a0a] p-6 hover:bg-white/[0.02] transition-colors"
+              className="bg-[var(--page-bg)] p-6 hover:bg-white/[0.02] transition-colors"
             >
               <div className="text-xs text-white/20 mb-5 tracking-widest">{step.number}</div>
               <h3 className="text-sm font-semibold text-white mb-3">{step.title}</h3>

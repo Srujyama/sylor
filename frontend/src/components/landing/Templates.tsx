@@ -117,7 +117,7 @@ export function Templates() {
             <Link
               key={t.name}
               href="/signup"
-              className="bg-[#0a0a0a] p-5 hover:bg-white/[0.02] transition-colors group block"
+              className="bg-[var(--page-bg)] p-5 hover:bg-white/[0.02] transition-colors group block"
             >
               <div className="flex items-start justify-between mb-3">
                 <span className="tag">{t.category}</span>

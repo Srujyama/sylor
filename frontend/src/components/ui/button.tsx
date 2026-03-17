@@ -8,26 +8,26 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        // Primary = white fill, black text (btn-primary style)
+        // Primary = inverted fill (btn-primary style)
         default:
-          "bg-[#ededed] text-[#0a0a0a] border border-[#ededed] hover:bg-white hover:border-white",
+          "bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] border border-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] hover:border-[var(--btn-primary-hover)]",
         // Ghost = transparent, dim border
         ghost:
-          "bg-transparent text-white/60 border border-white/10 hover:bg-white/[0.04] hover:text-white/90 hover:border-white/18",
+          "bg-transparent text-[var(--btn-ghost-text)] border border-[var(--btn-ghost-border)] hover:bg-[var(--btn-ghost-hover-bg)] hover:text-[var(--page-text)]",
         // Destructive
         destructive:
           "bg-red-500 text-white border border-red-500 hover:bg-red-400",
         // Outline — alias for ghost
         outline:
-          "bg-transparent text-white/60 border border-white/10 hover:bg-white/[0.04] hover:text-white/90",
+          "bg-transparent text-[var(--btn-ghost-text)] border border-[var(--btn-ghost-border)] hover:bg-[var(--btn-ghost-hover-bg)] hover:text-[var(--page-text)]",
         secondary:
-          "bg-white/[0.06] text-white/70 border border-white/10 hover:bg-white/[0.10]",
-        link: "text-white/60 underline-offset-4 hover:underline hover:text-white/90",
+          "bg-[var(--tag-bg)] text-[var(--tag-text)] border border-[var(--tag-border)] hover:bg-[var(--sidebar-active-bg)]",
+        link: "text-[var(--btn-ghost-text)] underline-offset-4 hover:underline hover:text-[var(--page-text)]",
         // Legacy aliases — map to sensible equivalents
         gradient:
-          "bg-[#ededed] text-[#0a0a0a] border border-[#ededed] hover:bg-white hover:border-white",
+          "bg-[var(--btn-primary-bg)] text-[var(--btn-primary-text)] border border-[var(--btn-primary-bg)] hover:bg-[var(--btn-primary-hover)] hover:border-[var(--btn-primary-hover)]",
         glass:
-          "bg-transparent text-white/60 border border-white/10 hover:bg-white/[0.04] hover:text-white/90 hover:border-white/18",
+          "bg-transparent text-[var(--btn-ghost-text)] border border-[var(--btn-ghost-border)] hover:bg-[var(--btn-ghost-hover-bg)] hover:text-[var(--page-text)]",
       },
       size: {
         default: "h-9 px-4 py-2 text-xs",

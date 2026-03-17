@@ -194,9 +194,9 @@ export default function DashboardPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-white/[0.05] mb-8">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-[var(--surface-border)] mb-8">
         {stats.map((stat) => (
-          <div key={stat.label} className="bg-[#0a0a0a] p-5">
+          <div key={stat.label} className="bg-[var(--page-bg)] p-5">
             {loading ? (
               <>
                 <div className="h-7 w-16 bg-white/[0.04] animate-pulse mb-1" />
@@ -214,9 +214,9 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-px bg-white/[0.05] mb-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-px bg-[var(--surface-border)] mb-8">
         {/* Category breakdown chart */}
-        <div className="bg-[#0a0a0a] p-5 lg:col-span-2">
+        <div className="bg-[var(--page-bg)] p-5 lg:col-span-2">
           <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">simulations by category</div>
           {categoryData.length > 0 ? (
             <ResponsiveContainer width="100%" height={180}>
@@ -254,7 +254,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Quick start */}
-        <div className="bg-[#0a0a0a] p-5">
+        <div className="bg-[var(--page-bg)] p-5">
           <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">quick start</div>
           <div className="space-y-0.5">
             {[

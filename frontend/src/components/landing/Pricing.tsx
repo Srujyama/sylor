@@ -113,7 +113,7 @@ export function Pricing() {
               className={`p-6 flex flex-col ${
                 plan.highlight
                   ? "bg-white/[0.04] border-t-2 border-t-white/40"
-                  : "bg-[#0a0a0a]"
+                  : "bg-[var(--page-bg)]"
               }`}
             >
               <div className="mb-6">

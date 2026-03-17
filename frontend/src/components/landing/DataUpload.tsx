@@ -20,7 +20,7 @@ export function DataUpload() {
       <div className="max-w-[1440px] mx-auto px-8">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-px bg-white/[0.05]">
           {/* Left — copy */}
-          <div className="bg-[#0a0a0a] p-8 lg:p-12 flex flex-col justify-center">
+          <div className="bg-[var(--page-bg)] p-8 lg:p-12 flex flex-col justify-center">
             <span className="tag mb-4 inline-flex w-fit">data-powered simulations</span>
             <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight mb-4 leading-tight">
               upload your data,<br />
@@ -70,7 +70,7 @@ export function DataUpload() {
           </div>
 
           {/* Right — mockup */}
-          <div className="bg-[#0a0a0a] p-6 lg:p-8">
+          <div className="bg-[var(--page-bg)] p-6 lg:p-8">
             {/* Drop zone mockup */}
             <div className="border border-dashed border-white/[0.15] p-8 mb-6 flex flex-col items-center justify-center text-center hover:border-white/[0.25] transition-colors">
               <Upload className="w-6 h-6 text-white/20 mb-3" />
@@ -103,7 +103,7 @@ export function DataUpload() {
               {/* Header row */}
               <div className="grid grid-cols-4 gap-px bg-white/[0.04]">
                 {["column", "type", "sample", "action"].map((h) => (
-                  <div key={h} className="bg-[#0a0a0a] px-3 py-1.5">
+                  <div key={h} className="bg-[var(--page-bg)] px-3 py-1.5">
                     <span className="text-[10px] text-white/20 tracking-widest uppercase">{h}</span>
                   </div>
                 ))}
@@ -115,16 +115,16 @@ export function DataUpload() {
                   key={col.name}
                   className={`grid grid-cols-4 gap-px bg-white/[0.04] ${i < mockColumns.length - 1 ? "" : ""}`}
                 >
-                  <div className="bg-[#0a0a0a] px-3 py-2">
+                  <div className="bg-[var(--page-bg)] px-3 py-2">
                     <span className="text-xs text-white/60 font-mono">{col.name}</span>
                   </div>
-                  <div className="bg-[#0a0a0a] px-3 py-2">
+                  <div className="bg-[var(--page-bg)] px-3 py-2">
                     <span className="tag text-[10px]">{col.type}</span>
                   </div>
-                  <div className="bg-[#0a0a0a] px-3 py-2">
+                  <div className="bg-[var(--page-bg)] px-3 py-2">
                     <span className="text-xs text-white/35 font-mono">{col.sample}</span>
                   </div>
-                  <div className="bg-[#0a0a0a] px-3 py-2">
+                  <div className="bg-[var(--page-bg)] px-3 py-2">
                     <span className="text-[10px] text-white/30">→ map to var</span>
                   </div>
                 </div>

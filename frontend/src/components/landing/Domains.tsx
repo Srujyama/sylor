@@ -48,7 +48,7 @@ export function Domains() {
           {domains.map((d) => (
             <div
               key={d.title}
-              className="bg-[#0a0a0a] p-6 hover:bg-white/[0.02] transition-colors group"
+              className="bg-[var(--page-bg)] p-6 hover:bg-white/[0.02] transition-colors group"
             >
               <div className="flex items-center gap-3 mb-5">
                 <div className="w-8 h-8 surface-raised flex items-center justify-center shrink-0">
@@ -89,7 +89,7 @@ export function Domains() {
             { label: "agent types", value: "10+" },
             { label: "configurable variables", value: "50+" },
           ].map((s) => (
-            <div key={s.label} className="bg-[#0a0a0a] p-4 text-center">
+            <div key={s.label} className="bg-[var(--page-bg)] p-4 text-center">
               <div className="text-lg font-bold text-white tracking-tight">{s.value}</div>
               <div className="text-[10px] text-white/25 tracking-wide">{s.label}</div>
             </div>

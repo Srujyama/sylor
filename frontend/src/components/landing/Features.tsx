@@ -77,7 +77,7 @@ export function Features() {
           {features.map((f) => (
             <div
               key={f.index}
-              className="bg-[#0a0a0a] p-6 hover:bg-white/[0.02] transition-colors group"
+              className="bg-[var(--page-bg)] p-6 hover:bg-white/[0.02] transition-colors group"
             >
               <div className="text-xs text-white/20 mb-4 tracking-widest">{f.index}</div>
               <h3 className="text-sm font-semibold text-white mb-2 group-hover:text-white/90">{f.title}</h3>

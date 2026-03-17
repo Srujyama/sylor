@@ -295,7 +295,7 @@ function TemplateCard({
   return (
     <Link
       href={`/simulations/new?template=${template.category}`}
-      className="bg-[#0a0a0a] p-5 hover:bg-white/[0.02] transition-colors group block"
+      className="bg-[var(--page-bg)] p-5 hover:bg-white/[0.02] transition-colors group block"
     >
       <div className="flex items-start gap-3 mb-3">
         <Icon className="w-4 h-4 text-white/25 mt-0.5 shrink-0 group-hover:text-white/50 transition-colors" />

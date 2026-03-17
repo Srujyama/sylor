@@ -123,7 +123,7 @@ export default function ChangelogPage() {
                   <div className="absolute left-[7px] top-3 bottom-0 w-px bg-white/[0.06]" />
                 )}
                 {/* Timeline dot */}
-                <div className="absolute left-0 top-1.5 w-[15px] h-[15px] border border-white/15 bg-[#0a0a0a] flex items-center justify-center">
+                <div className="absolute left-0 top-1.5 w-[15px] h-[15px] border border-white/15 bg-[var(--page-bg)] flex items-center justify-center">
                   <div className={`w-[5px] h-[5px] ${i === 0 ? "bg-white" : "bg-white/30"}`} />
                 </div>
 

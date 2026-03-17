@@ -189,7 +189,7 @@ export default function AnalyticsPage() {
           { label: "avg success rate", value: `${Math.round(avgSuccess)}%`, icon: TrendingUp },
           { label: "categories used", value: categoryBreakdown.length, icon: BarChart2 },
         ].map((stat) => (
-          <div key={stat.label} className="bg-[#0a0a0a] p-5">
+          <div key={stat.label} className="bg-[var(--page-bg)] p-5">
             <div className="flex items-center gap-2 mb-2">
               <stat.icon className="w-3.5 h-3.5 text-white/20" />
               <span className="text-[10px] text-white/25 uppercase tracking-wider">{stat.label}</span>
@@ -202,7 +202,7 @@ export default function AnalyticsPage() {
       {/* Charts row 1 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-px bg-white/[0.05] mb-8">
         {/* Growth over time */}
-        <div className="bg-[#0a0a0a] p-5">
+        <div className="bg-[var(--page-bg)] p-5">
           <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">simulation growth</div>
           {timelineData.length > 1 ? (
             <ResponsiveContainer width="100%" height={220}>
@@ -228,7 +228,7 @@ export default function AnalyticsPage() {
         </div>
 
         {/* Success rate by category */}
-        <div className="bg-[#0a0a0a] p-5">
+        <div className="bg-[var(--page-bg)] p-5">
           <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">success rate by category</div>
           {successByCategory.length > 0 ? (
             <ResponsiveContainer width="100%" height={220}>
@@ -255,7 +255,7 @@ export default function AnalyticsPage() {
       {/* Charts row 2 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-px bg-white/[0.05] mb-8">
         {/* Category pie */}
-        <div className="bg-[#0a0a0a] p-5">
+        <div className="bg-[var(--page-bg)] p-5">
           <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">category distribution</div>
           {categoryBreakdown.length > 0 ? (
             <ResponsiveContainer width="100%" height={200}>
@@ -275,7 +275,7 @@ export default function AnalyticsPage() {
         </div>
 
         {/* Success distribution */}
-        <div className="bg-[#0a0a0a] p-5">
+        <div className="bg-[var(--page-bg)] p-5">
           <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">success probability distribution</div>
           {completed.length > 0 ? (
             <ResponsiveContainer width="100%" height={200}>
@@ -293,7 +293,7 @@ export default function AnalyticsPage() {
         </div>
 
         {/* Status breakdown */}
-        <div className="bg-[#0a0a0a] p-5">
+        <div className="bg-[var(--page-bg)] p-5">
           <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">status overview</div>
           <div className="space-y-3">
             {statusBreakdown.map((s) => (
@@ -319,7 +319,7 @@ export default function AnalyticsPage() {
       {/* Top simulations + Best performer */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-px bg-white/[0.05]">
         {/* Top simulations */}
-        <div className="bg-[#0a0a0a] p-5 lg:col-span-2">
+        <div className="bg-[var(--page-bg)] p-5 lg:col-span-2">
           <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">top performing simulations</div>
           {topSimulations.length > 0 ? (
             <div className="space-y-0">
@@ -354,7 +354,7 @@ export default function AnalyticsPage() {
         </div>
 
         {/* Best performer highlight */}
-        <div className="bg-[#0a0a0a] p-5">
+        <div className="bg-[var(--page-bg)] p-5">
           <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">best performer</div>
           {bestSim ? (
             <Link href={`/simulations/${bestSim.id}`} className="block group">

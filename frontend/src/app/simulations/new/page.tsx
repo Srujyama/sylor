@@ -375,7 +375,7 @@ export default function NewSimulationPage() {
                 key={cat.id}
                 onClick={() => { setCategory(cat.id as SimulationCategory); setContext({}); setSelectedChannels([]); setAnalysis(null); }}
                 className={cn(
-                  "p-4 text-left transition-all bg-[#0a0a0a] hover:bg-white/[0.03]",
+                  "p-4 text-left transition-all bg-[var(--page-bg)] hover:bg-white/[0.03]",
                   category === cat.id ? "bg-white/[0.05] border-l-2 border-l-white/40" : ""
                 )}
               >
