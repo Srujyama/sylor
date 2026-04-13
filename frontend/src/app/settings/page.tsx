@@ -4,11 +4,13 @@ export const dynamic = 'force-dynamic';
 
 import { useState, useEffect } from "react";
 import { onAuthChange } from "@/lib/firebase/auth";
+import { getDocument, updateDocument } from "@/lib/firebase/firestore";
 import { useToast } from "@/components/ui/toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { getApiUrl } from "@/lib/utils";
 import {
-  User, Bell, Palette, Key, Shield, Download, Trash2, Check, Copy, Eye, EyeOff,
+  User, Bell, Palette, Key, Shield, Download, Trash2, Check, Copy, Eye, EyeOff, Loader2,
 } from "lucide-react";
 
 type SettingsTab = "account" | "preferences" | "api" | "notifications" | "danger";
@@ -39,20 +41,85 @@ export default function SettingsPage() {
   const [emailOnFail, setEmailOnFail] = useState(true);
   const [weeklyDigest, setWeeklyDigest] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = onAuthChange((u) => {
+    const unsubscribe = onAuthChange(async (u) => {
       if (u) {
         setUser(u);
         setDisplayName(u.displayName || "");
         setEmail(u.email || "");
+        // Load saved preferences from Firestore
+        const profile = await getDocument("profiles", u.uid);
+        if (profile) {
+          const prefs = (profile as any).preferences || {};
+          const notifs = (profile as any).notifications || {};
+          if (prefs.defaultRuns) setDefaultRuns(String(prefs.defaultRuns));
+          if (prefs.defaultHorizon) setDefaultHorizon(String(prefs.defaultHorizon));
+          if (prefs.autoRunOnCreate !== undefined) setAutoRunOnCreate(prefs.autoRunOnCreate);
+          if (prefs.showInsightsPanel !== undefined) setShowInsightsPanel(prefs.showInsightsPanel);
+          if (prefs.darkCharts !== undefined) setDarkCharts(prefs.darkCharts);
+          if (prefs.compactMode !== undefined) setCompactMode(prefs.compactMode);
+          if (notifs.emailOnComplete !== undefined) setEmailOnComplete(notifs.emailOnComplete);
+          if (notifs.emailOnFail !== undefined) setEmailOnFail(notifs.emailOnFail);
+          if (notifs.weeklyDigest !== undefined) setWeeklyDigest(notifs.weeklyDigest);
+        }
       }
     });
     return () => unsubscribe();
   }, []);
 
-  function handleSave() {
-    toast({ title: "Settings saved", variant: "success" });
+  async function handleSave() {
+    if (!user) return;
+    setSaving(true);
+    try {
+      await updateDocument("profiles", user.uid, {
+        fullName: displayName,
+        preferences: {
+          defaultRuns: parseInt(defaultRuns) || 1000,
+          defaultHorizon: parseInt(defaultHorizon) || 12,
+          autoRunOnCreate,
+          showInsightsPanel,
+          darkCharts,
+          compactMode,
+        },
+        notifications: {
+          emailOnComplete,
+          emailOnFail,
+          weeklyDigest,
+        },
+      });
+      toast({ title: "Settings saved", variant: "success" });
+    } catch {
+      toast({ title: "Failed to save settings", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleExport(format: "json" | "csv") {
+    if (!user) return;
+    setExporting(true);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch(`${getApiUrl()}/api/export/simulations?format=${format}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `simulations.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: `Exported as ${format.toUpperCase()}` });
+    } catch {
+      toast({ title: "Export failed", variant: "destructive" });
+    } finally {
+      setExporting(false);
+    }
   }
 
   function handleCopyApiKey() {
@@ -141,8 +208,8 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              <button onClick={handleSave} className="btn-primary text-xs py-2 px-6">
-                <Check className="w-3 h-3" /> save changes
+              <button onClick={handleSave} disabled={saving} className="btn-primary text-xs py-2 px-6">
+                {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />} save changes
               </button>
             </div>
           )}
@@ -202,8 +269,8 @@ export default function SettingsPage() {
                 />
               </div>
 
-              <button onClick={handleSave} className="btn-primary text-xs py-2 px-6">
-                <Check className="w-3 h-3" /> save preferences
+              <button onClick={handleSave} disabled={saving} className="btn-primary text-xs py-2 px-6">
+                {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />} save preferences
               </button>
             </div>
           )}
@@ -282,11 +349,11 @@ export default function SettingsPage() {
                   Export all your simulation data in machine-readable formats.
                 </p>
                 <div className="flex gap-2">
-                  <button className="btn-ghost text-xs py-1.5 px-4">
-                    <Download className="w-3 h-3" /> export as JSON
+                  <button onClick={() => handleExport("json")} disabled={exporting} className="btn-ghost text-xs py-1.5 px-4">
+                    {exporting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />} export as JSON
                   </button>
-                  <button className="btn-ghost text-xs py-1.5 px-4">
-                    <Download className="w-3 h-3" /> export as CSV
+                  <button onClick={() => handleExport("csv")} disabled={exporting} className="btn-ghost text-xs py-1.5 px-4">
+                    {exporting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />} export as CSV
                   </button>
                 </div>
               </div>
@@ -326,8 +393,8 @@ export default function SettingsPage() {
                 />
               </div>
 
-              <button onClick={handleSave} className="btn-primary text-xs py-2 px-6">
-                <Check className="w-3 h-3" /> save notification settings
+              <button onClick={handleSave} disabled={saving} className="btn-primary text-xs py-2 px-6">
+                {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />} save notification settings
               </button>
             </div>
           )}

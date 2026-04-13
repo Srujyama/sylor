@@ -282,6 +282,105 @@ class DataStreamAgent(Agent):
         }
 
 
+class SupplyChainAgent(Agent):
+    """Models supplier reliability, lead times, and inventory costs."""
+
+    def __init__(self, count: int, sensitivity: float):
+        super().__init__("supply_chain", count, sensitivity)
+        self.state = {
+            "reliability": 0.85 + random.uniform(-0.1, 0.1),
+            "lead_time": random.randint(7, 30),  # days
+            "inventory_cost": random.uniform(0.01, 0.05),  # % of revenue
+            "disrupted": False,
+        }
+
+    def react(self, market_state: Dict, variables: Dict) -> Dict:
+        demand_growth = market_state.get("month_growth", 0)
+        month = market_state.get("month", 1)
+
+        # Demand spikes stress the supply chain
+        if demand_growth > 0.15:
+            self.state["lead_time"] = min(60, self.state["lead_time"] + random.randint(1, 5))
+            self.state["reliability"] = max(0.5, self.state["reliability"] - 0.03 * self.sensitivity)
+            self.state["inventory_cost"] *= 1 + 0.1 * self.sensitivity
+        else:
+            self.state["lead_time"] = max(3, self.state["lead_time"] - random.randint(0, 2))
+            self.state["reliability"] = min(0.99, self.state["reliability"] + 0.01)
+
+        # Random disruption events (3% per month)
+        if random.random() < 0.03:
+            self.state["disrupted"] = True
+            self.state["reliability"] *= 0.6
+            self.state["lead_time"] *= 2
+        elif self.state["disrupted"] and random.random() < 0.3:
+            self.state["disrupted"] = False
+
+        cost_impact = self.state["inventory_cost"] * (1 + (1 - self.state["reliability"]))
+        return {
+            "reliability": round(self.state["reliability"], 3),
+            "lead_time": self.state["lead_time"],
+            "cost_impact": round(cost_impact, 4),
+            "disrupted": self.state["disrupted"],
+        }
+
+
+class EmployeeAgent(Agent):
+    """Models hiring, productivity ramp-up, and attrition."""
+
+    def __init__(self, count: int, sensitivity: float):
+        super().__init__("employee", count, sensitivity)
+        self.state = {
+            "headcount": count,
+            "avg_productivity": 0.7 + random.uniform(-0.1, 0.1),  # 0-1
+            "attrition_rate": 0.02 + random.uniform(-0.01, 0.01),  # monthly
+            "hiring_pipeline": 0,
+            "morale": 0.75,
+        }
+
+    def react(self, market_state: Dict, variables: Dict) -> Dict:
+        revenue = market_state.get("revenue", 0)
+        customers = market_state.get("total_customers", 0)
+        month = market_state.get("month", 1)
+
+        # Hiring need scales with customer growth
+        target_headcount = max(self.state["headcount"], int(customers / 50) + 5)
+        hiring_gap = target_headcount - self.state["headcount"]
+
+        # Hire (with ramp-up delay — new hires start at 40% productivity)
+        new_hires = min(hiring_gap, max(1, int(hiring_gap * 0.3)))
+        if new_hires > 0:
+            old_prod = self.state["avg_productivity"] * self.state["headcount"]
+            new_prod = 0.4 * new_hires
+            self.state["headcount"] += new_hires
+            self.state["avg_productivity"] = (old_prod + new_prod) / self.state["headcount"]
+        else:
+            # Existing employees ramp up over time
+            self.state["avg_productivity"] = min(1.0, self.state["avg_productivity"] + 0.02)
+
+        # Attrition
+        attrition = int(self.state["headcount"] * self.state["attrition_rate"] * random.gauss(1, 0.3))
+        attrition = max(0, min(attrition, self.state["headcount"] - 1))
+        self.state["headcount"] -= attrition
+
+        # Morale affected by growth rate and headcount pressure
+        if hiring_gap > self.state["headcount"] * 0.3:
+            self.state["morale"] = max(0.3, self.state["morale"] - 0.05 * self.sensitivity)
+        else:
+            self.state["morale"] = min(1.0, self.state["morale"] + 0.02)
+
+        # Productivity multiplier for revenue
+        productivity_multiplier = self.state["avg_productivity"] * self.state["morale"]
+
+        return {
+            "headcount": self.state["headcount"],
+            "productivity": round(self.state["avg_productivity"], 3),
+            "morale": round(self.state["morale"], 3),
+            "attrition": attrition,
+            "new_hires": new_hires,
+            "productivity_multiplier": round(productivity_multiplier, 3),
+        }
+
+
 class SimulationEngine:
     """Monte Carlo simulation engine with multi-agent interactions."""
 
@@ -319,6 +418,10 @@ class SimulationEngine:
                 agents.append(EnzymeAgent(agent_cfg.count, agent_cfg.sensitivity))
             elif agent_type == "data_stream":
                 agents.append(DataStreamAgent(agent_cfg.count, agent_cfg.sensitivity))
+            elif agent_type == "supply_chain":
+                agents.append(SupplyChainAgent(agent_cfg.count, agent_cfg.sensitivity))
+            elif agent_type == "employee":
+                agents.append(EmployeeAgent(agent_cfg.count, agent_cfg.sensitivity))
         return agents
 
     def _run_single(self, variables: Optional[Dict] = None) -> Dict[str, Any]:
@@ -377,6 +480,8 @@ class SimulationEngine:
             market_effect = 1.0
             new_funding = 0
             competitor_strength = 50
+            supply_cost_impact = 0
+            productivity_multiplier = 1.0
 
             for agent in agents:
                 result = agent.react(market_state, vars_)
@@ -390,13 +495,17 @@ class SimulationEngine:
                     new_funding += result.get("funding", 0)
                 elif agent.type == "competitor":
                     competitor_strength = result.get("strength", 50)
+                elif agent.type == "supply_chain":
+                    supply_cost_impact += result.get("cost_impact", 0)
+                elif agent.type == "employee":
+                    productivity_multiplier = result.get("productivity_multiplier", 1.0)
 
             total_funding += new_funding
             budget += new_funding
 
             prev_revenue = revenue
-            revenue = customers * price * market_effect + random.gauss(0, max(customers * price * 0.1, 1))
-            revenue = max(0, revenue)
+            revenue = customers * price * market_effect * productivity_multiplier + random.gauss(0, max(customers * price * 0.1, 1))
+            revenue = max(0, revenue * (1 - supply_cost_impact))
 
             market_share = min(100, (customers / max(market_size, 1)) * 100)
 

@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 import time
 
 from app.config import settings
-from app.routers import simulations, templates, upload, context, projects, graphs, reports
+from app.routers import simulations, templates, upload, context, projects, graphs, reports, users, export
 
 app = FastAPI(
     title="Sylor API",
@@ -39,6 +39,8 @@ app.include_router(simulations.router)
 app.include_router(templates.router)
 app.include_router(upload.router)
 app.include_router(context.router)
+app.include_router(users.router)      # User profile & preferences
+app.include_router(export.router)     # Data export
 
 # ── New MiroFish-Inspired Routers ────────────────────────────────────────────
 app.include_router(projects.router)   # Unified project orchestration

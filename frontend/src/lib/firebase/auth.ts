@@ -6,6 +6,7 @@ import {
   signOut,
   onAuthStateChanged,
   updateProfile,
+  sendPasswordResetEmail,
   type User,
 } from "firebase/auth";
 import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
@@ -55,6 +56,11 @@ async function createUserProfile(user: User, fullName: string) {
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+}
+
+// ── Password reset ──────────────────────────────────────────
+export async function sendPasswordReset(email: string) {
+  return sendPasswordResetEmail(auth, email);
 }
 
 // ── Auth state observer ──────────────────────────────────────

@@ -23,6 +23,8 @@ class AgentType(str, Enum):
     MOLECULE = "molecule"
     ENZYME = "enzyme"
     DATA_STREAM = "data_stream"
+    SUPPLY_CHAIN = "supply_chain"
+    EMPLOYEE = "employee"
 
 
 class SimulationCategory(str, Enum):
@@ -61,6 +63,10 @@ _AGENT_TYPE_FALLBACK_MAP = {
     "data": "data_stream", "signal": "data_stream", "trend_agent": "data_stream",
     "sensor": "data_stream", "feed": "data_stream", "ligand": "molecule",
     "protein": "molecule", "substrate": "molecule", "catalyst": "enzyme", "inhibitor": "molecule",
+    "supplier": "supply_chain", "vendor": "supply_chain", "logistics": "supply_chain",
+    "warehouse": "supply_chain", "procurement": "supply_chain",
+    "worker": "employee", "staff": "employee", "hire": "employee", "team": "employee",
+    "talent": "employee", "hr": "employee",
 }
 
 
