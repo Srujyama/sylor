@@ -7,7 +7,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  Plus, Search, Loader2, ArrowRight, RotateCcw, Trash2, Copy,
+  Plus, Search, Loader2, ArrowRight, RotateCcw, Trash2, Copy, BarChart2,
 } from "lucide-react";
 import { listSimulations, duplicateSimulation as duplicateSimApi, deleteSimulation as deleteSimApi } from "@/lib/api";
 import { onAuthChange } from "@/lib/firebase/auth";
@@ -161,10 +161,16 @@ export default function SimulationsPage() {
             </p>
           )}
         </div>
-        <Link href="/simulations/new" className="btn-primary text-xs py-2 px-4 inline-flex items-center gap-1.5">
-          <Plus className="w-3 h-3" />
-          new simulation
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link href="/simulations/compare" className="text-xs py-2 px-4 inline-flex items-center gap-1.5 border border-white/[0.06] text-white/40 hover:text-white/70 hover:border-white/15 transition-colors">
+            <BarChart2 className="w-3 h-3" />
+            compare
+          </Link>
+          <Link href="/simulations/new" className="btn-primary text-xs py-2 px-4 inline-flex items-center gap-1.5">
+            <Plus className="w-3 h-3" />
+            new simulation
+          </Link>
+        </div>
       </div>
 
       {/* Filters */}

@@ -81,15 +81,18 @@ async def generate_report_sync(body: GenerateReportRequest):
 # ── Report CRUD ──────────────────────────────────────────────────────────────
 
 @router.get("")
-async def list_reports(simulation_id: Optional[str] = None):
-    """List reports, optionally filtered by simulation ID."""
-    return ReportAgent.list_reports(simulation_id)
+async def list_reports(
+    simulation_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+):
+    """List reports, optionally filtered by simulation ID and/or user_id."""
+    return await ReportAgent.list_reports(simulation_id=simulation_id, user_id=user_id)
 
 
 @router.get("/{report_id}")
 async def get_report(report_id: str):
     """Get a specific report."""
-    report = ReportAgent.get_report(report_id)
+    report = await ReportAgent.get_report(report_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
     return report.to_dict()
@@ -118,7 +121,7 @@ async def get_report_progress(report_id: str):
 @router.get("/{report_id}/sections")
 async def get_report_sections(report_id: str):
     """Get all generated sections (supports incremental polling)."""
-    report = ReportAgent.get_report(report_id)
+    report = await ReportAgent.get_report(report_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
     return {
@@ -132,7 +135,7 @@ async def get_report_sections(report_id: str):
 @router.get("/{report_id}/download")
 async def download_report(report_id: str):
     """Download report as markdown file."""
-    report = ReportAgent.get_report(report_id)
+    report = await ReportAgent.get_report(report_id)
     if not report or not report.full_markdown:
         raise HTTPException(status_code=404, detail="Report not found or not complete")
 
@@ -146,7 +149,7 @@ async def download_report(report_id: str):
 @router.get("/by-simulation/{simulation_id}")
 async def get_report_by_simulation(simulation_id: str):
     """Get report by simulation ID."""
-    report = ReportAgent.get_report_by_simulation(simulation_id)
+    report = await ReportAgent.get_report_by_simulation(simulation_id)
     if not report:
         raise HTTPException(status_code=404, detail="No report found for this simulation")
     return report.to_dict()
@@ -155,7 +158,7 @@ async def get_report_by_simulation(simulation_id: str):
 @router.delete("/{report_id}", status_code=204)
 async def delete_report(report_id: str):
     """Delete a report."""
-    if not ReportAgent.delete_report(report_id):
+    if not await ReportAgent.delete_report(report_id):
         raise HTTPException(status_code=404, detail="Report not found")
 
 

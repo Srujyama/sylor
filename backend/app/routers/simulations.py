@@ -1,7 +1,9 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
-from fastapi.responses import JSONResponse
-from typing import List, Optional
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from typing import List, Optional, AsyncGenerator
 import uuid
+import json
+import asyncio
 from datetime import datetime
 
 from app.models.simulation import (
@@ -14,6 +16,50 @@ from app.services.firebase_admin import (
     create_document, get_document, update_document, delete_document, query_collection, get_db,
 )
 from app.middleware.auth import get_current_user
+from app.middleware.rate_limit import require_expensive_rate_limit
+
+import re
+
+# ---------------------------------------------------------------------------
+# Input-validation helpers
+# ---------------------------------------------------------------------------
+
+_MAX_NAME_LENGTH = 200
+_MAX_DESCRIPTION_LENGTH = 2000
+
+
+def _sanitize_string(value: Optional[str], max_length: int) -> Optional[str]:
+    """Strip excessive whitespace and enforce length limit."""
+    if value is None:
+        return None
+    # Collapse internal whitespace runs to a single space and strip ends
+    cleaned = re.sub(r"\s+", " ", value).strip()
+    return cleaned[:max_length]
+
+
+def _validate_variable_overrides(
+    overrides: Optional[dict], config: SimulationConfig
+) -> None:
+    """Raise 422 if any override key does not match a known variable name."""
+    if not overrides:
+        return
+    valid_names = {v.name for v in config.variables}
+    invalid = set(overrides.keys()) - valid_names
+    if invalid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown variable override keys: {sorted(invalid)}. "
+                   f"Valid keys are: {sorted(valid_names)}",
+        )
+
+
+def _validate_num_runs(num_runs: Optional[int]) -> None:
+    """Enforce bounds on num_runs when provided."""
+    if num_runs is not None and (num_runs < 10 or num_runs > 10000):
+        raise HTTPException(
+            status_code=422,
+            detail="num_runs must be between 10 and 10,000.",
+        )
 
 router = APIRouter(prefix="/api/simulations", tags=["simulations"])
 
@@ -55,6 +101,10 @@ def _sanitize_agent_type(agent_type_str: str) -> str:
 
 @router.post("", response_model=dict, status_code=201)
 async def create_simulation(payload: SimulationCreate, user: dict = Depends(get_current_user)):
+    # Sanitize string inputs
+    payload.config.name = _sanitize_string(payload.config.name, _MAX_NAME_LENGTH) or "Untitled"
+    payload.config.description = _sanitize_string(payload.config.description, _MAX_DESCRIPTION_LENGTH)
+
     sim_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
 
@@ -103,13 +153,15 @@ async def get_simulation(sim_id: str, user: dict = Depends(get_current_user)):
     return sim
 
 
-@router.post("/{sim_id}/run")
+@router.post("/{sim_id}/run", dependencies=[Depends(require_expensive_rate_limit)])
 async def run_simulation(
     sim_id: str,
     request: RunSimulationRequest,
     background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
 ):
+    _validate_num_runs(request.num_runs)
+
     sim = await get_document(COLLECTION, sim_id)
     if not sim:
         raise HTTPException(status_code=404, detail="Simulation not found")
@@ -117,6 +169,10 @@ async def run_simulation(
         raise HTTPException(status_code=403, detail="Not authorized")
     if sim["status"] == SimulationStatus.RUNNING.value:
         raise HTTPException(status_code=409, detail="Simulation is already running")
+
+    # Validate variable_overrides against config
+    config = SimulationConfig(**sim["config"])
+    _validate_variable_overrides(request.variable_overrides, config)
 
     await update_document(COLLECTION, sim_id, {
         "status": SimulationStatus.RUNNING.value,
@@ -132,6 +188,113 @@ async def run_simulation(
     )
 
     return {"status": "running", "sim_id": sim_id}
+
+
+# ── SSE Streaming endpoint ─────────────────────────────────────────────────
+
+def _sse_event(event: str, data: dict) -> str:
+    """Format a Server-Sent Event."""
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@router.post("/{sim_id}/run/stream", dependencies=[Depends(require_expensive_rate_limit)])
+async def run_simulation_stream(
+    sim_id: str,
+    request: RunSimulationRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Run simulation with SSE progress streaming.
+
+    Sends events:
+      - progress: { percent, completed, total, phase }
+      - complete: { results }
+      - error: { detail }
+    """
+    _validate_num_runs(request.num_runs)
+
+    sim = await get_document(COLLECTION, sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if sim.get("user_id") != user["uid"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if sim["status"] == SimulationStatus.RUNNING.value:
+        raise HTTPException(status_code=409, detail="Simulation is already running")
+
+    config = SimulationConfig(**sim["config"])
+    _validate_variable_overrides(request.variable_overrides, config)
+
+    await update_document(COLLECTION, sim_id, {
+        "status": SimulationStatus.RUNNING.value,
+        "updated_at": datetime.utcnow().isoformat(),
+    })
+
+    async def stream_simulation() -> AsyncGenerator[str, None]:
+        try:
+            engine = SimulationEngine(config)
+            n = request.num_runs or config.num_runs
+            progress_queue: asyncio.Queue = asyncio.Queue()
+
+            async def on_progress(completed: int, total: int):
+                pct = round(completed / total * 85)  # Reserve 15% for post-processing
+                await progress_queue.put(_sse_event("progress", {
+                    "percent": pct, "completed": completed, "total": total, "phase": "running"
+                }))
+
+            yield _sse_event("progress", {"percent": 0, "completed": 0, "total": n, "phase": "running"})
+
+            # Run simulation with progress callback
+            results = await engine.run(
+                num_runs=n,
+                variable_overrides=request.variable_overrides,
+                progress_callback=on_progress,
+            )
+
+            # Drain queued progress events
+            while not progress_queue.empty():
+                yield await progress_queue.get()
+
+            yield _sse_event("progress", {"percent": 90, "completed": n, "total": n, "phase": "ai_insights"})
+
+            # AI insights
+            try:
+                ai_data = await generate_ai_insights(config, results, company_context=config.company_context)
+                results.key_insights = ai_data.get("key_insights", results.key_insights)
+                results.success_explanation = ai_data.get("success_pattern", results.success_explanation)
+                results.failure_explanation = ai_data.get("failure_pattern", results.failure_explanation)
+            except Exception:
+                pass
+
+            yield _sse_event("progress", {"percent": 98, "completed": n, "total": n, "phase": "saving"})
+
+            # Save to Firestore
+            doc = await get_document(COLLECTION, sim_id)
+            run_count = (doc.get("run_count", 0) if doc else 0) + 1
+            await update_document(COLLECTION, sim_id, {
+                "status": SimulationStatus.COMPLETED.value,
+                "results": results.model_dump(mode="json"),
+                "run_count": run_count,
+                "updated_at": datetime.utcnow().isoformat(),
+            })
+
+            yield _sse_event("complete", {"sim_id": sim_id, "success_probability": results.success_probability})
+
+        except Exception as e:
+            await update_document(COLLECTION, sim_id, {
+                "status": SimulationStatus.FAILED.value,
+                "error": str(e),
+                "updated_at": datetime.utcnow().isoformat(),
+            })
+            yield _sse_event("error", {"detail": str(e)})
+
+    return StreamingResponse(
+        stream_simulation(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 async def _execute_simulation(
@@ -236,7 +399,8 @@ class SweepPoint(BaseModel):
     avg_revenue: float
 
 
-@router.post("/{sim_id}/sweep", response_model=List[SweepPoint])
+@router.post("/{sim_id}/sweep", response_model=List[SweepPoint],
+              dependencies=[Depends(require_expensive_rate_limit)])
 async def sweep_variable(
     sim_id: str,
     request: SweepRequest,
@@ -249,6 +413,15 @@ async def sweep_variable(
         raise HTTPException(status_code=403, detail="Not authorized")
 
     config = SimulationConfig(**sim["config"])
+
+    # Validate that variable_name exists in the config
+    valid_names = {v.name for v in config.variables}
+    if request.variable_name not in valid_names:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown variable '{request.variable_name}'. "
+                   f"Valid variables: {sorted(valid_names)}",
+        )
     step_size = (request.max_value - request.min_value) / (request.steps - 1)
     points = []
 
@@ -311,12 +484,17 @@ async def import_simulation(payload: SimulationImport, user: dict = Depends(get_
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid simulation config: {e}")
 
+    # Sanitize imported strings
+    config.name = _sanitize_string(config.name, _MAX_NAME_LENGTH) or "Untitled"
+    config.description = _sanitize_string(config.description, _MAX_DESCRIPTION_LENGTH)
+
     sim_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
+    imported_name = _sanitize_string(payload.name, _MAX_NAME_LENGTH) if payload.name else None
     sim = {
         "id": sim_id,
         "user_id": user["uid"],
-        "name": payload.name or config.name,
+        "name": imported_name or config.name,
         "description": config.description,
         "category": config.category.value,
         "config": config.model_dump(mode="json"),

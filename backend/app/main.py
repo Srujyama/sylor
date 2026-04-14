@@ -16,6 +16,7 @@ import time
 
 from app.config import settings
 from app.routers import simulations, templates, upload, context, projects, graphs, reports, users, export
+from app.middleware.rate_limit import RateLimitMiddleware
 
 app = FastAPI(
     title="Sylor API",
@@ -24,6 +25,10 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# Rate limiting (must be added before CORS so it runs after CORS in the
+# middleware stack — Starlette middleware order is LIFO)
+app.add_middleware(RateLimitMiddleware)
 
 # CORS
 app.add_middleware(

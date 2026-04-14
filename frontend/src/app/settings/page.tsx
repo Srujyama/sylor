@@ -3,14 +3,15 @@
 export const dynamic = 'force-dynamic';
 
 import { useState, useEffect } from "react";
-import { onAuthChange } from "@/lib/firebase/auth";
+import { useRouter } from "next/navigation";
+import { onAuthChange, logOut } from "@/lib/firebase/auth";
 import { getDocument, updateDocument } from "@/lib/firebase/firestore";
 import { useToast } from "@/components/ui/toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getApiUrl } from "@/lib/utils";
 import {
-  User, Bell, Palette, Key, Shield, Download, Trash2, Check, Copy, Eye, EyeOff, Loader2,
+  User, Bell, Palette, Key, Shield, Download, Trash2, Check, Copy, Eye, EyeOff, Loader2, LogOut,
 } from "lucide-react";
 
 type SettingsTab = "account" | "preferences" | "api" | "notifications" | "danger";
@@ -25,8 +26,10 @@ const tabs: { id: SettingsTab; label: string; icon: typeof User }[] = [
 
 export default function SettingsPage() {
   const { toast } = useToast();
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<SettingsTab>("account");
   const [user, setUser] = useState<any>(null);
+  const [deleting, setDeleting] = useState(false);
 
   // Form states
   const [displayName, setDisplayName] = useState("");
@@ -92,7 +95,7 @@ export default function SettingsPage() {
       });
       toast({ title: "Settings saved", variant: "success" });
     } catch {
-      toast({ title: "Failed to save settings", variant: "destructive" });
+      toast({ title: "Failed to save settings", variant: "error" });
     } finally {
       setSaving(false);
     }
@@ -116,7 +119,7 @@ export default function SettingsPage() {
       URL.revokeObjectURL(url);
       toast({ title: `Exported as ${format.toUpperCase()}` });
     } catch {
-      toast({ title: "Export failed", variant: "destructive" });
+      toast({ title: "Export failed", variant: "error" });
     } finally {
       setExporting(false);
     }
@@ -125,6 +128,38 @@ export default function SettingsPage() {
   function handleCopyApiKey() {
     navigator.clipboard.writeText("sk-sylor-demo-xxxxxxxxxxxx");
     toast({ title: "API key copied to clipboard" });
+  }
+
+  async function handleLogout() {
+    try {
+      await logOut();
+      router.push("/login");
+    } catch {
+      toast({ title: "Failed to sign out", variant: "error" });
+    }
+  }
+
+  async function handleDeleteAccount() {
+    if (!user) return;
+    const confirmed = window.confirm(
+      "This will permanently delete your account and ALL data. This cannot be undone. Are you sure?"
+    );
+    if (!confirmed) return;
+
+    setDeleting(true);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch(`${getApiUrl()}/api/users/me`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error("Delete failed");
+      await logOut();
+      router.push("/login");
+    } catch {
+      toast({ title: "Failed to delete account", variant: "error" });
+      setDeleting(false);
+    }
   }
 
   return (
@@ -407,26 +442,35 @@ export default function SettingsPage() {
                 <p className="text-[11px] text-white/25">irreversible actions — proceed with caution</p>
               </div>
 
-              <div className="border border-red-500/20 p-5 space-y-4 bg-red-500/[0.02]">
+              {/* Sign out */}
+              <div className="surface p-5">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-sm text-white">Delete all simulations</div>
-                    <div className="text-[11px] text-white/25">Permanently remove all your simulations and results</div>
+                    <div className="text-sm text-white">Sign out</div>
+                    <div className="text-[11px] text-white/25">Sign out of your account on this device</div>
                   </div>
-                  <button className="text-xs py-1.5 px-4 border border-red-500/30 text-red-400/70 hover:bg-red-500/10 transition-colors">
-                    <Trash2 className="w-3 h-3 inline mr-1.5" /> delete all
+                  <button
+                    onClick={handleLogout}
+                    className="text-xs py-1.5 px-4 border border-white/10 text-white/50 hover:bg-white/[0.05] transition-colors"
+                  >
+                    <LogOut className="w-3 h-3 inline mr-1.5" /> sign out
                   </button>
                 </div>
+              </div>
 
-                <div className="border-t border-red-500/10" />
-
+              <div className="border border-red-500/20 p-5 space-y-4 bg-red-500/[0.02]">
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="text-sm text-white">Delete account</div>
                     <div className="text-[11px] text-white/25">Permanently delete your account and all associated data</div>
                   </div>
-                  <button className="text-xs py-1.5 px-4 border border-red-500/30 text-red-400/70 hover:bg-red-500/10 transition-colors">
-                    <Trash2 className="w-3 h-3 inline mr-1.5" /> delete account
+                  <button
+                    onClick={handleDeleteAccount}
+                    disabled={deleting}
+                    className="text-xs py-1.5 px-4 border border-red-500/30 text-red-400/70 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+                  >
+                    {deleting ? <Loader2 className="w-3 h-3 inline mr-1.5 animate-spin" /> : <Trash2 className="w-3 h-3 inline mr-1.5" />}
+                    {deleting ? "deleting..." : "delete account"}
                   </button>
                 </div>
               </div>

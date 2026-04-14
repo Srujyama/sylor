@@ -7,9 +7,11 @@ Improved with:
 - Anthropic Claude for ontology generation (vs generic OpenAI-compat in MiroFish)
 - Better entity relationship modeling for business/finance/biology domains
 - In-memory graph option when Zep is not configured
+- Firestore persistence with in-memory hot cache
 """
 import asyncio
 import json
+import logging
 import uuid
 import re
 from typing import Optional, List, Dict, Any, Callable, Awaitable
@@ -20,6 +22,8 @@ from enum import Enum
 from app.config import settings
 from app.services.llm_client import LLMClient, llm_client
 from app.services.text_processor import TextProcessor, TextChunk
+
+logger = logging.getLogger(__name__)
 
 
 # ── Data Models ──────────────────────────────────────────────────────────────
@@ -112,6 +116,7 @@ class KnowledgeGraph:
     edges: Dict[str, EntityEdge] = field(default_factory=dict)
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     metadata: Dict[str, Any] = field(default_factory=dict)
+    user_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -123,7 +128,73 @@ class KnowledgeGraph:
             "edge_count": len(self.edges),
             "created_at": self.created_at,
             "metadata": self.metadata,
+            "user_id": self.user_id,
         }
+
+    def to_firestore_dict(self) -> Dict[str, Any]:
+        """Full serialisation for Firestore persistence."""
+        return {
+            "graph_id": self.graph_id,
+            "name": self.name,
+            "status": self.status.value,
+            "ontology": self.ontology.to_dict() if self.ontology else None,
+            "nodes": {uid: n.to_dict() for uid, n in self.nodes.items()},
+            "edges": {uid: e.to_dict() for uid, e in self.edges.items()},
+            "created_at": self.created_at,
+            "metadata": self.metadata,
+            "user_id": self.user_id,
+        }
+
+    @classmethod
+    def from_firestore_dict(cls, data: Dict[str, Any]) -> "KnowledgeGraph":
+        """Reconstruct a KnowledgeGraph from a Firestore document."""
+        ontology_data = data.get("ontology")
+        ontology = None
+        if ontology_data:
+            ontology = Ontology(
+                entity_types=ontology_data.get("entity_types", []),
+                edge_types=ontology_data.get("edge_types", []),
+                domain=ontology_data.get("domain", "general"),
+            )
+
+        nodes = {}
+        for uid, nd in (data.get("nodes") or {}).items():
+            nodes[uid] = EntityNode(
+                uuid=nd["uuid"],
+                name=nd["name"],
+                entity_type=nd["entity_type"],
+                summary=nd.get("summary", ""),
+                attributes=nd.get("attributes", {}),
+                related_edges=nd.get("related_edges", []),
+                related_nodes=nd.get("related_nodes", []),
+                relevance_score=nd.get("relevance_score", 0.0),
+            )
+
+        edges = {}
+        for uid, ed in (data.get("edges") or {}).items():
+            edges[uid] = EntityEdge(
+                uuid=ed["uuid"],
+                source_uuid=ed["source_uuid"],
+                target_uuid=ed["target_uuid"],
+                relation_type=ed["relation_type"],
+                description=ed.get("description", ""),
+                weight=ed.get("weight", 1.0),
+                is_temporal=ed.get("is_temporal", False),
+                valid_from=ed.get("valid_from"),
+                valid_to=ed.get("valid_to"),
+            )
+
+        return cls(
+            graph_id=data["graph_id"],
+            name=data["name"],
+            status=GraphStatus(data.get("status", "created")),
+            ontology=ontology,
+            nodes=nodes,
+            edges=edges,
+            created_at=data.get("created_at", ""),
+            metadata=data.get("metadata", {}),
+            user_id=data.get("user_id"),
+        )
 
 
 # ── Ontology Generator ──────────────────────────────────────────────────────
@@ -308,24 +379,71 @@ class KnowledgeGraphBuilder:
     Builds knowledge graphs from documents using LLM-powered entity extraction.
     Adapted from MiroFish's GraphBuilderService but uses in-memory graphs
     with optional Zep Cloud backend.
+
+    Persistence: graphs are cached in-memory (_graphs) and persisted to
+    the Firestore ``knowledge_graphs`` collection keyed by graph_id.
     """
 
-    # In-memory graph store
+    FIRESTORE_COLLECTION = "knowledge_graphs"
+
+    # In-memory graph store (hot cache)
     _graphs: Dict[str, KnowledgeGraph] = {}
 
     def __init__(self, client: Optional[LLMClient] = None):
         self.llm = client or llm_client
         self.ontology_generator = OntologyGenerator(self.llm)
 
-    async def create_graph(self, name: str, domain: str = "general") -> KnowledgeGraph:
+    # ── Firestore helpers ───────────────────────────────────────────────────
+
+    async def _persist_graph(self, graph: KnowledgeGraph) -> None:
+        """Save or overwrite a graph document in Firestore."""
+        try:
+            from app.services.firebase_admin import get_db
+            db = get_db()
+            doc_ref = db.collection(self.FIRESTORE_COLLECTION).document(graph.graph_id)
+            await doc_ref.set(graph.to_firestore_dict())
+        except Exception as exc:
+            logger.warning("Failed to persist graph %s to Firestore: %s", graph.graph_id, exc)
+
+    async def _load_graph_from_firestore(self, graph_id: str) -> Optional[KnowledgeGraph]:
+        """Load a graph from Firestore and populate the in-memory cache."""
+        try:
+            from app.services.firebase_admin import get_db
+            db = get_db()
+            snap = await db.collection(self.FIRESTORE_COLLECTION).document(graph_id).get()
+            if not snap.exists:
+                return None
+            graph = KnowledgeGraph.from_firestore_dict(snap.to_dict())
+            self._graphs[graph_id] = graph
+            return graph
+        except Exception as exc:
+            logger.warning("Failed to load graph %s from Firestore: %s", graph_id, exc)
+            return None
+
+    async def _delete_graph_from_firestore(self, graph_id: str) -> None:
+        """Delete a graph document from Firestore."""
+        try:
+            from app.services.firebase_admin import get_db
+            db = get_db()
+            await db.collection(self.FIRESTORE_COLLECTION).document(graph_id).delete()
+        except Exception as exc:
+            logger.warning("Failed to delete graph %s from Firestore: %s", graph_id, exc)
+
+    # ── Public API ──────────────────────────────────────────────────────────
+
+    async def create_graph(
+        self, name: str, domain: str = "general", user_id: Optional[str] = None,
+    ) -> KnowledgeGraph:
         """Create a new empty knowledge graph."""
         graph_id = f"graph_{uuid.uuid4().hex[:12]}"
         graph = KnowledgeGraph(
             graph_id=graph_id,
             name=name,
             status=GraphStatus.CREATED,
+            user_id=user_id,
         )
         self._graphs[graph_id] = graph
+        await self._persist_graph(graph)
         return graph
 
     async def build_graph(
@@ -422,11 +540,15 @@ class KnowledgeGraphBuilder:
             if progress_callback:
                 await progress_callback(100.0, "Graph complete!")
 
+            # Persist completed graph to Firestore
+            await self._persist_graph(graph)
+
             return graph
 
         except Exception as e:
             graph.status = GraphStatus.FAILED
             graph.metadata["error"] = str(e)
+            await self._persist_graph(graph)
             raise
 
     async def _extract_from_chunk(
@@ -532,41 +654,75 @@ Only extract entities that clearly appear in the text. Use the exact type names 
 
     # ── Graph Query Methods ──────────────────────────────────────────────────
 
-    def get_graph(self, graph_id: str) -> Optional[KnowledgeGraph]:
-        return self._graphs.get(graph_id)
+    async def get_graph(self, graph_id: str) -> Optional[KnowledgeGraph]:
+        """Return graph from in-memory cache, falling back to Firestore."""
+        graph = self._graphs.get(graph_id)
+        if graph is not None:
+            return graph
+        return await self._load_graph_from_firestore(graph_id)
 
-    def list_graphs(self) -> List[Dict[str, Any]]:
+    async def list_graphs(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        List graphs. If *user_id* is given, return only that user's graphs
+        (queries Firestore). Otherwise returns everything from cache + Firestore.
+        """
+        if user_id is not None:
+            try:
+                from app.services.firebase_admin import query_collection
+                docs = await query_collection(
+                    self.FIRESTORE_COLLECTION,
+                    [("user_id", "==", user_id)],
+                )
+                # Merge into cache
+                for doc in docs:
+                    gid = doc.get("graph_id")
+                    if gid and gid not in self._graphs:
+                        self._graphs[gid] = KnowledgeGraph.from_firestore_dict(doc)
+                return [
+                    g.to_dict()
+                    for g in self._graphs.values()
+                    if g.user_id == user_id
+                ]
+            except Exception as exc:
+                logger.warning("Firestore query failed in list_graphs: %s", exc)
+                return [
+                    g.to_dict()
+                    for g in self._graphs.values()
+                    if g.user_id == user_id
+                ]
+
+        # No user_id filter: return everything in cache
         return [g.to_dict() for g in self._graphs.values()]
 
-    def delete_graph(self, graph_id: str) -> bool:
-        if graph_id in self._graphs:
-            del self._graphs[graph_id]
-            return True
-        return False
+    async def delete_graph(self, graph_id: str) -> bool:
+        deleted = graph_id in self._graphs
+        self._graphs.pop(graph_id, None)
+        await self._delete_graph_from_firestore(graph_id)
+        return deleted or True  # also succeed if only in Firestore
 
-    def get_nodes(self, graph_id: str) -> List[EntityNode]:
-        graph = self._graphs.get(graph_id)
+    async def get_nodes(self, graph_id: str) -> List[EntityNode]:
+        graph = await self.get_graph(graph_id)
         if not graph:
             return []
         return list(graph.nodes.values())
 
-    def get_edges(self, graph_id: str) -> List[EntityEdge]:
-        graph = self._graphs.get(graph_id)
+    async def get_edges(self, graph_id: str) -> List[EntityEdge]:
+        graph = await self.get_graph(graph_id)
         if not graph:
             return []
         return list(graph.edges.values())
 
-    def get_entities_by_type(self, graph_id: str, entity_type: str) -> List[EntityNode]:
+    async def get_entities_by_type(self, graph_id: str, entity_type: str) -> List[EntityNode]:
         """Filter entities by type (from MiroFish's ZepEntityReader pattern)."""
-        graph = self._graphs.get(graph_id)
+        graph = await self.get_graph(graph_id)
         if not graph:
             return []
         return [n for n in graph.nodes.values()
                 if n.entity_type.lower() == entity_type.lower()]
 
-    def get_entity_with_context(self, graph_id: str, entity_uuid: str) -> Optional[EntityNode]:
+    async def get_entity_with_context(self, graph_id: str, entity_uuid: str) -> Optional[EntityNode]:
         """Get entity with all its relationships."""
-        graph = self._graphs.get(graph_id)
+        graph = await self.get_graph(graph_id)
         if not graph:
             return None
         return graph.nodes.get(entity_uuid)
@@ -578,7 +734,7 @@ Only extract entities that clearly appear in the text. Use the exact type names 
         Semantic search over graph entities.
         Improved over MiroFish: uses Claude for relevance scoring instead of keyword matching.
         """
-        graph = self._graphs.get(graph_id)
+        graph = await self.get_graph(graph_id)
         if not graph or not graph.nodes:
             return []
 
@@ -625,9 +781,9 @@ Return the UUIDs of the most relevant entities, ordered by relevance:
             scored.sort(key=lambda n: n.relevance_score, reverse=True)
             return scored[:limit]
 
-    def get_graph_statistics(self, graph_id: str) -> Dict[str, Any]:
+    async def get_graph_statistics(self, graph_id: str) -> Dict[str, Any]:
         """Get graph statistics (from MiroFish pattern)."""
-        graph = self._graphs.get(graph_id)
+        graph = await self.get_graph(graph_id)
         if not graph:
             return {}
 

@@ -178,7 +178,7 @@ class SimulationResponse(BaseModel):
 
 
 class RunSimulationRequest(BaseModel):
-    num_runs: Optional[int] = None
+    num_runs: Optional[int] = Field(default=None, ge=10, le=10000)
     variable_overrides: Optional[Dict[str, float]] = None
 
 

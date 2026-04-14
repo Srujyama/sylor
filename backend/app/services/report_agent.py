@@ -7,9 +7,11 @@ Adapted from MiroFish's report_agent.py (2571 lines) with major improvements:
 - Tool system uses knowledge graph + simulation results (not just Zep)
 - Structured progress tracking with SSE support
 - Cleaner ReACT loop with better conflict resolution
+- Firestore persistence for reports
 """
 import asyncio
 import json
+import logging
 import re
 import uuid
 from typing import Optional, List, Dict, Any, Callable, Awaitable
@@ -18,6 +20,8 @@ from datetime import datetime
 
 from app.services.llm_client import LLMClient, llm_client
 from app.services.knowledge_graph import KnowledgeGraphBuilder, graph_builder
+
+logger = logging.getLogger(__name__)
 
 
 # ── Data Models ──────────────────────────────────────────────────────────────
@@ -56,6 +60,7 @@ class Report:
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     status: str = "pending"
     metadata: Dict[str, Any] = field(default_factory=dict)
+    user_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -68,7 +73,36 @@ class Report:
             "created_at": self.created_at,
             "status": self.status,
             "metadata": self.metadata,
+            "user_id": self.user_id,
         }
+
+    def to_firestore_dict(self) -> Dict[str, Any]:
+        """Full serialisation for Firestore persistence."""
+        return self.to_dict()
+
+    @classmethod
+    def from_firestore_dict(cls, data: Dict[str, Any]) -> "Report":
+        """Reconstruct a Report from a Firestore document."""
+        sections = []
+        for sd in (data.get("sections") or []):
+            sections.append(ReportSection(
+                index=sd.get("index", 0),
+                title=sd.get("title", ""),
+                content=sd.get("content", ""),
+                status=sd.get("status", "completed"),
+            ))
+        return cls(
+            report_id=data["report_id"],
+            simulation_id=data.get("simulation_id", ""),
+            title=data.get("title", ""),
+            summary=data.get("summary", ""),
+            sections=sections,
+            full_markdown=data.get("full_markdown", ""),
+            created_at=data.get("created_at", ""),
+            status=data.get("status", "completed"),
+            metadata=data.get("metadata", {}),
+            user_id=data.get("user_id"),
+        )
 
 
 # ── Tool Definitions ─────────────────────────────────────────────────────────
@@ -129,8 +163,49 @@ class ReportAgent:
 
     # ── Report Store ─────────────────────────────────────────────────────────
 
+    FIRESTORE_COLLECTION = "reports"
+
     _reports: Dict[str, Report] = {}
     _progress: Dict[str, ReportProgress] = {}
+
+    # ── Firestore helpers ───────────────────────────────────────────────────
+
+    @classmethod
+    async def _persist_report(cls, report: Report) -> None:
+        """Save or overwrite a report document in Firestore."""
+        try:
+            from app.services.firebase_admin import get_db
+            db = get_db()
+            doc_ref = db.collection(cls.FIRESTORE_COLLECTION).document(report.report_id)
+            await doc_ref.set(report.to_firestore_dict())
+        except Exception as exc:
+            logger.warning("Failed to persist report %s to Firestore: %s", report.report_id, exc)
+
+    @classmethod
+    async def _load_report_from_firestore(cls, report_id: str) -> Optional[Report]:
+        """Load a report from Firestore into the in-memory cache."""
+        try:
+            from app.services.firebase_admin import get_db
+            db = get_db()
+            snap = await db.collection(cls.FIRESTORE_COLLECTION).document(report_id).get()
+            if not snap.exists:
+                return None
+            report = Report.from_firestore_dict(snap.to_dict())
+            cls._reports[report_id] = report
+            return report
+        except Exception as exc:
+            logger.warning("Failed to load report %s from Firestore: %s", report_id, exc)
+            return None
+
+    @classmethod
+    async def _delete_report_from_firestore(cls, report_id: str) -> None:
+        """Delete a report document from Firestore."""
+        try:
+            from app.services.firebase_admin import get_db
+            db = get_db()
+            await db.collection(cls.FIRESTORE_COLLECTION).document(report_id).delete()
+        except Exception as exc:
+            logger.warning("Failed to delete report %s from Firestore: %s", report_id, exc)
 
     # ── Planning Phase ───────────────────────────────────────────────────────
 
@@ -146,7 +221,7 @@ class ReportAgent:
         # Get graph context if available (MiroFish pattern)
         graph_context = ""
         if self.graph_id:
-            stats = graph_builder.get_graph_statistics(self.graph_id)
+            stats = await graph_builder.get_graph_statistics(self.graph_id)
             if stats:
                 graph_context = f"\nKnowledge Graph: {stats.get('total_nodes', 0)} entities, {stats.get('total_edges', 0)} relationships"
                 entity_types = stats.get("entity_types", {})
@@ -395,7 +470,7 @@ RULES:
 
             elif tool_name == "get_statistics":
                 if self.graph_id:
-                    stats = graph_builder.get_graph_statistics(self.graph_id)
+                    stats = await graph_builder.get_graph_statistics(self.graph_id)
                     return json.dumps(stats, indent=1, default=str)
 
                 # Return simulation stats instead
@@ -555,6 +630,7 @@ RULES:
         category: str,
         graph_id: Optional[str] = None,
         progress_callback: Optional[Callable[[float, str], Awaitable[None]]] = None,
+        user_id: Optional[str] = None,
     ) -> Report:
         """
         Generate a full report from simulation results.
@@ -566,6 +642,7 @@ RULES:
         report = Report(
             report_id=report_id,
             simulation_id=simulation_id,
+            user_id=user_id,
         )
         self._reports[report_id] = report
 
@@ -629,6 +706,9 @@ RULES:
             if progress_callback:
                 await progress_callback(100.0, "Report complete!")
 
+            # Persist completed report to Firestore
+            await self._persist_report(report)
+
             return report
 
         except Exception as e:
@@ -636,6 +716,7 @@ RULES:
             report.metadata["error"] = str(e)
             progress.status = "failed"
             progress.message = str(e)
+            await self._persist_report(report)
             raise
 
     def _assemble_report(self, report: Report) -> str:
@@ -673,6 +754,9 @@ RULES:
         Adapted from MiroFish's simplified ReACT chat (2 iterations, 2 tools).
         """
         report = self._reports.get(report_id)
+        if not report:
+            # Try loading from Firestore
+            report = await self._load_report_from_firestore(report_id)
         if not report:
             return "Report not found."
 
@@ -721,34 +805,81 @@ Otherwise, answer directly."""
     # ── Report Store Methods ─────────────────────────────────────────────────
 
     @classmethod
-    def get_report(cls, report_id: str) -> Optional[Report]:
-        return cls._reports.get(report_id)
+    async def get_report(cls, report_id: str) -> Optional[Report]:
+        """Return report from in-memory cache, falling back to Firestore."""
+        report = cls._reports.get(report_id)
+        if report is not None:
+            return report
+        return await cls._load_report_from_firestore(report_id)
 
     @classmethod
     def get_progress(cls, report_id: str) -> Optional[ReportProgress]:
         return cls._progress.get(report_id)
 
     @classmethod
-    def list_reports(cls, simulation_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        reports = cls._reports.values()
+    async def list_reports(
+        cls,
+        simulation_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        List reports. Supports filtering by simulation_id and/or user_id.
+        Queries Firestore when user_id is provided.
+        """
+        if user_id is not None:
+            try:
+                from app.services.firebase_admin import query_collection
+                filters = [("user_id", "==", user_id)]
+                if simulation_id:
+                    filters.append(("simulation_id", "==", simulation_id))
+                docs = await query_collection(cls.FIRESTORE_COLLECTION, filters)
+                # Merge into cache
+                for doc in docs:
+                    rid = doc.get("report_id")
+                    if rid and rid not in cls._reports:
+                        cls._reports[rid] = Report.from_firestore_dict(doc)
+                reports = [
+                    r for r in cls._reports.values()
+                    if r.user_id == user_id
+                    and (simulation_id is None or r.simulation_id == simulation_id)
+                ]
+                return [r.to_dict() for r in reports]
+            except Exception as exc:
+                logger.warning("Firestore query failed in list_reports: %s", exc)
+
+        reports = list(cls._reports.values())
         if simulation_id:
             reports = [r for r in reports if r.simulation_id == simulation_id]
         return [r.to_dict() for r in reports]
 
     @classmethod
-    def get_report_by_simulation(cls, simulation_id: str) -> Optional[Report]:
+    async def get_report_by_simulation(cls, simulation_id: str) -> Optional[Report]:
+        # Check in-memory first
         for r in cls._reports.values():
             if r.simulation_id == simulation_id:
                 return r
+        # Fall back to Firestore
+        try:
+            from app.services.firebase_admin import query_collection
+            docs = await query_collection(
+                cls.FIRESTORE_COLLECTION,
+                [("simulation_id", "==", simulation_id)],
+            )
+            if docs:
+                report = Report.from_firestore_dict(docs[0])
+                cls._reports[report.report_id] = report
+                return report
+        except Exception as exc:
+            logger.warning("Firestore query failed in get_report_by_simulation: %s", exc)
         return None
 
     @classmethod
-    def delete_report(cls, report_id: str) -> bool:
-        if report_id in cls._reports:
-            del cls._reports[report_id]
-            cls._progress.pop(report_id, None)
-            return True
-        return False
+    async def delete_report(cls, report_id: str) -> bool:
+        deleted = report_id in cls._reports
+        cls._reports.pop(report_id, None)
+        cls._progress.pop(report_id, None)
+        await cls._delete_report_from_firestore(report_id)
+        return deleted or True
 
 
 # Singleton

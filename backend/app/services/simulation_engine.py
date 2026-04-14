@@ -715,8 +715,18 @@ class SimulationEngine:
             "timeline": timeline if timeline else [{"month": 1, "revenue": 0, "customers": 0, "market_share": 0, "competitor_strength": 0, "budget": 0}],
         }
 
-    async def run(self, num_runs: Optional[int] = None, variable_overrides: Optional[Dict] = None) -> SimulationResults:
-        """Run full Monte Carlo simulation."""
+    async def run(
+        self,
+        num_runs: Optional[int] = None,
+        variable_overrides: Optional[Dict] = None,
+        progress_callback: Optional[Any] = None,
+    ) -> SimulationResults:
+        """Run full Monte Carlo simulation.
+
+        Args:
+            progress_callback: Optional async callable(completed: int, total: int)
+                called after each batch completes, for SSE streaming.
+        """
         n = num_runs or self.config.num_runs
 
         # Run in batches — larger batches reduce asyncio overhead for CPU-bound tasks
@@ -728,6 +738,8 @@ class SimulationEngine:
                 *[asyncio.to_thread(self._run_single, variable_overrides) for _ in range(batch)]
             )
             results.extend(batch_results)
+            if progress_callback:
+                await progress_callback(len(results), n)
 
         # Aggregate results
         successes = [r for r in results if r["success"]]

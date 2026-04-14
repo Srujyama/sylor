@@ -132,7 +132,7 @@ class AgentProfileGenerator:
         Generate agent profiles from knowledge graph entities.
         Follows MiroFish pattern: read entities -> generate profiles -> parallel execution.
         """
-        graph = graph_builder.get_graph(graph_id)
+        graph = await graph_builder.get_graph(graph_id)
         if not graph:
             raise ValueError(f"Graph {graph_id} not found")
 

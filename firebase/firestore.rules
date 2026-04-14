@@ -37,6 +37,33 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ── knowledge_graphs ────────────────────────────────────────
+    // Written by backend Admin SDK; client can read own graphs
+    match /knowledge_graphs/{graphId} {
+      allow read:   if isSignedIn() && resource.data.user_id == request.auth.uid;
+      allow create: if false; // Admin SDK only
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // ── tasks ───────────────────────────────────────────────────
+    // Written by backend Admin SDK; client can read own tasks
+    match /tasks/{taskId} {
+      allow read:   if isSignedIn() && resource.data.user_id == request.auth.uid;
+      allow create: if false;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // ── reports ─────────────────────────────────────────────────
+    // Written by backend Admin SDK; client can read own reports
+    match /reports/{reportId} {
+      allow read:   if isSignedIn() && resource.data.user_id == request.auth.uid;
+      allow create: if false;
+      allow update: if false;
+      allow delete: if false;
+    }
+
     // Block all other collections by default
     match /{document=**} {
       allow read, write: if false;

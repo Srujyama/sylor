@@ -15,14 +15,18 @@ Improvements over MiroFish:
 - Domain-agnostic (works for business, finance, biology, trend)
 - Unified data model across all phases
 - Real-time progress streaming via SSE
+- Firestore persistence for tasks
 """
 import asyncio
+import logging
 import uuid
 import json
 from typing import Optional, List, Dict, Any, Callable, Awaitable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 from app.services.knowledge_graph import (
     KnowledgeGraphBuilder, graph_builder, KnowledgeGraph, Ontology
@@ -173,30 +177,75 @@ class SimulationOrchestrator:
             reverse=True,
         )
 
-    def delete_project(self, project_id: str) -> bool:
+    async def delete_project(self, project_id: str) -> bool:
         if project_id in self._projects:
             project = self._projects[project_id]
             # Clean up associated resources
             if project.graph_id:
-                graph_builder.delete_graph(project.graph_id)
+                await graph_builder.delete_graph(project.graph_id)
             if project.report_id:
-                ReportAgent.delete_report(project.report_id)
+                await ReportAgent.delete_report(project.report_id)
             del self._projects[project_id]
             return True
         return False
 
     # ── Task Management (from MiroFish's TaskManager) ────────────────────────
 
-    def _create_task(self, task_type: str) -> Task:
+    TASK_COLLECTION = "tasks"
+
+    async def _persist_task(self, task: Task) -> None:
+        """Save or update a task document in Firestore."""
+        try:
+            from app.services.firebase_admin import get_db
+            db = get_db()
+            doc_ref = db.collection(self.TASK_COLLECTION).document(task.task_id)
+            await doc_ref.set(task.to_dict())
+        except Exception as exc:
+            logger.warning("Failed to persist task %s to Firestore: %s", task.task_id, exc)
+
+    async def _load_task_from_firestore(self, task_id: str) -> Optional[Task]:
+        """Load a task from Firestore into the in-memory cache."""
+        try:
+            from app.services.firebase_admin import get_db
+            db = get_db()
+            snap = await db.collection(self.TASK_COLLECTION).document(task_id).get()
+            if not snap.exists:
+                return None
+            data = snap.to_dict()
+            task = Task(
+                task_id=data["task_id"],
+                task_type=data.get("task_type", ""),
+                status=TaskStatus(data.get("status", "pending")),
+                progress=data.get("progress", 0.0),
+                message=data.get("message", ""),
+                result=data.get("result"),
+                error=data.get("error"),
+                created_at=data.get("created_at", ""),
+            )
+            self._tasks[task_id] = task
+            return task
+        except Exception as exc:
+            logger.warning("Failed to load task %s from Firestore: %s", task_id, exc)
+            return None
+
+    async def _create_task(self, task_type: str) -> Task:
         task = Task(
             task_id=f"task_{uuid.uuid4().hex[:12]}",
             task_type=task_type,
         )
         self._tasks[task.task_id] = task
+        await self._persist_task(task)
         return task
 
-    def get_task(self, task_id: str) -> Optional[Task]:
-        return self._tasks.get(task_id)
+    async def _update_task_status(self, task: Task) -> None:
+        """Persist current task state to Firestore (called on status transitions)."""
+        await self._persist_task(task)
+
+    async def get_task(self, task_id: str) -> Optional[Task]:
+        task = self._tasks.get(task_id)
+        if task is not None:
+            return task
+        return await self._load_task_from_firestore(task_id)
 
     # ── Phase 1: Document Processing ─────────────────────────────────────────
 
@@ -263,7 +312,7 @@ class SimulationOrchestrator:
         if not project.extracted_text:
             raise ValueError("No documents uploaded. Upload documents first.")
 
-        task = self._create_task("graph_build")
+        task = await self._create_task("graph_build")
         project.status = ProjectStatus.GRAPH_BUILDING
 
         # Run in background
@@ -281,6 +330,7 @@ class SimulationOrchestrator:
     ):
         """Background graph building worker."""
         task.status = TaskStatus.PROCESSING
+        await self._update_task_status(task)
 
         try:
             # Create graph
@@ -323,6 +373,7 @@ class SimulationOrchestrator:
             task.error = str(e)
 
         project.updated_at = datetime.utcnow().isoformat()
+        await self._update_task_status(task)
 
     # ── Phase 3: Agent Profile Generation ────────────────────────────────────
 
@@ -338,7 +389,7 @@ class SimulationOrchestrator:
         if not project:
             raise ValueError(f"Project {project_id} not found")
 
-        task = self._create_task("profile_generation")
+        task = await self._create_task("profile_generation")
 
         asyncio.create_task(
             self._generate_profiles_worker(
@@ -358,6 +409,7 @@ class SimulationOrchestrator:
     ):
         """Background profile generation worker."""
         task.status = TaskStatus.PROCESSING
+        await self._update_task_status(task)
 
         try:
             async def update_progress(pct: float, msg: str):
@@ -390,6 +442,7 @@ class SimulationOrchestrator:
             task.error = str(e)
 
         project.updated_at = datetime.utcnow().isoformat()
+        await self._update_task_status(task)
 
     # ── Phase 4: Run Simulation ──────────────────────────────────────────────
 
@@ -450,7 +503,7 @@ class SimulationOrchestrator:
         if not project.simulation_results:
             raise ValueError("No simulation results available. Run simulation first.")
 
-        task = self._create_task("report_generation")
+        task = await self._create_task("report_generation")
 
         asyncio.create_task(
             self._generate_report_worker(project, task, progress_callback)
@@ -466,6 +519,7 @@ class SimulationOrchestrator:
     ):
         """Background report generation worker."""
         task.status = TaskStatus.PROCESSING
+        await self._update_task_status(task)
 
         try:
             async def update_progress(pct: float, msg: str):
@@ -493,6 +547,7 @@ class SimulationOrchestrator:
             task.error = str(e)
 
         project.updated_at = datetime.utcnow().isoformat()
+        await self._update_task_status(task)
 
     # ── Phase 6: Chat ────────────────────────────────────────────────────────
 

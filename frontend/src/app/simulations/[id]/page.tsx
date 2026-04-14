@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   ArrowLeft, Zap, TrendingUp, AlertTriangle, CheckCircle, Info,
   BarChart3, GitBranch, Users2, Lightbulb, RefreshCw, Download, Loader2,
-  Share2, FileJson, FileSpreadsheet, Clock,
+  Share2, FileJson, FileSpreadsheet, Clock, SlidersHorizontal,
 } from "lucide-react";
 import Link from "next/link";
 import { cn, formatCurrency, getApiUrl } from "@/lib/utils";
@@ -377,6 +377,9 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
               </div>
             )}
           </div>
+          <Button variant="glass" size="sm" asChild>
+            <Link href={`/simulations/${params.id}/sweep`}><SlidersHorizontal className="w-4 h-4" /> Sensitivity</Link>
+          </Button>
           <Button variant="gradient" size="sm" asChild>
             <Link href={`/simulations/${params.id}/compare`}><GitBranch className="w-4 h-4" /> Compare</Link>
           </Button>

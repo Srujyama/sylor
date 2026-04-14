@@ -4,11 +4,13 @@
  */
 
 import { getApiUrl } from "./utils";
+import { auth } from "./firebase/client";
 
 interface FetchOptions extends RequestInit {
   retries?: number;
   retryDelay?: number;
   timeout?: number;
+  skipAuth?: boolean;
 }
 
 class ApiError extends Error {
@@ -22,11 +24,34 @@ class ApiError extends Error {
   }
 }
 
+/**
+ * Get the current user's Firebase ID token for API authentication.
+ * Returns null if no user is signed in.
+ */
+async function getAuthToken(): Promise<string | null> {
+  const user = auth?.currentUser;
+  if (!user) return null;
+  try {
+    return await user.getIdToken();
+  } catch {
+    return null;
+  }
+}
+
 async function fetchWithRetry(
   url: string,
   options: FetchOptions = {}
 ): Promise<Response> {
-  const { retries = 2, retryDelay = 1500, timeout = 60000, ...fetchOpts } = options;
+  const { retries = 2, retryDelay = 1500, timeout = 60000, skipAuth = false, ...fetchOpts } = options;
+
+  // Attach Firebase auth token to every API request
+  const authHeaders: Record<string, string> = {};
+  if (!skipAuth) {
+    const token = await getAuthToken();
+    if (token) {
+      authHeaders["Authorization"] = `Bearer ${token}`;
+    }
+  }
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
@@ -38,6 +63,7 @@ async function fetchWithRetry(
         signal: controller.signal,
         headers: {
           "Content-Type": "application/json",
+          ...authHeaders,
           ...fetchOpts.headers,
         },
       });
@@ -147,6 +173,106 @@ export async function deleteSimulation(simId: string) {
     `${getApiUrl()}/api/simulations/${simId}`,
     { method: "DELETE" }
   );
+  return res.json();
+}
+
+export async function sweepVariable(
+  simId: string,
+  data: { variable_name: string; min_value: number; max_value: number; steps?: number; num_runs?: number }
+) {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/sweep`,
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+      timeout: 300000,
+      retries: 0,
+    }
+  );
+  return res.json();
+}
+
+// ─── SSE Streaming ───────────────────────────────────────
+
+export interface SimulationProgress {
+  percent: number;
+  completed: number;
+  total: number;
+  phase: "running" | "aggregating" | "ai_insights" | "saving";
+}
+
+/**
+ * Run a simulation with real-time SSE progress streaming.
+ * Falls back to the regular run endpoint if SSE is not supported.
+ */
+export async function runSimulationStream(
+  simId: string,
+  opts: { num_runs?: number; variable_overrides?: Record<string, number> } = {},
+  callbacks: {
+    onProgress?: (progress: SimulationProgress) => void;
+    onComplete?: (data: { sim_id: string; success_probability: number }) => void;
+    onError?: (error: string) => void;
+  } = {}
+): Promise<void> {
+  const token = await getAuthToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(`${getApiUrl()}/api/simulations/${simId}/run/stream`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(opts),
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new ApiError(data?.detail || `HTTP ${res.status}`, res.status, data);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new ApiError("Streaming not supported", 0);
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    let currentEvent = "";
+    for (const line of lines) {
+      if (line.startsWith("event: ")) {
+        currentEvent = line.slice(7).trim();
+      } else if (line.startsWith("data: ") && currentEvent) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (currentEvent === "progress" && callbacks.onProgress) {
+            callbacks.onProgress(data);
+          } else if (currentEvent === "complete" && callbacks.onComplete) {
+            callbacks.onComplete(data);
+          } else if (currentEvent === "error" && callbacks.onError) {
+            callbacks.onError(data.detail);
+          }
+        } catch {
+          // Ignore malformed JSON
+        }
+        currentEvent = "";
+      }
+    }
+  }
+}
+
+export async function compareSimulations(simulationIds: string[]) {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/simulations/compare`, {
+    method: "POST",
+    body: JSON.stringify({ simulation_ids: simulationIds }),
+  });
   return res.json();
 }
 

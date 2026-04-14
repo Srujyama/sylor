@@ -52,7 +52,7 @@ async def get_project(project_id: str):
 @router.delete("/{project_id}", status_code=204)
 async def delete_project(project_id: str):
     """Delete a project and all associated resources."""
-    if not orchestrator.delete_project(project_id):
+    if not await orchestrator.delete_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
 
 
@@ -203,7 +203,7 @@ async def get_task_status(task_id: str):
     Poll task progress.
     Adapted from MiroFish's /graph/task/<task_id> endpoint.
     """
-    task = orchestrator.get_task(task_id)
+    task = await orchestrator.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task.to_dict()

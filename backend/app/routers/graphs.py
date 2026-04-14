@@ -18,15 +18,15 @@ class SearchRequest(BaseModel):
 
 
 @router.get("")
-async def list_graphs():
-    """List all knowledge graphs."""
-    return graph_builder.list_graphs()
+async def list_graphs(user_id: Optional[str] = None):
+    """List all knowledge graphs, optionally filtered by user_id."""
+    return await graph_builder.list_graphs(user_id=user_id)
 
 
 @router.get("/{graph_id}")
 async def get_graph(graph_id: str):
     """Get graph metadata and statistics."""
-    stats = graph_builder.get_graph_statistics(graph_id)
+    stats = await graph_builder.get_graph_statistics(graph_id)
     if not stats:
         raise HTTPException(status_code=404, detail="Graph not found")
     return stats
@@ -36,9 +36,9 @@ async def get_graph(graph_id: str):
 async def get_nodes(graph_id: str, entity_type: Optional[str] = None):
     """Get all nodes, optionally filtered by entity type."""
     if entity_type:
-        nodes = graph_builder.get_entities_by_type(graph_id, entity_type)
+        nodes = await graph_builder.get_entities_by_type(graph_id, entity_type)
     else:
-        nodes = graph_builder.get_nodes(graph_id)
+        nodes = await graph_builder.get_nodes(graph_id)
 
     return {"nodes": [n.to_dict() for n in nodes], "count": len(nodes)}
 
@@ -46,14 +46,14 @@ async def get_nodes(graph_id: str, entity_type: Optional[str] = None):
 @router.get("/{graph_id}/edges")
 async def get_edges(graph_id: str):
     """Get all edges in the graph."""
-    edges = graph_builder.get_edges(graph_id)
+    edges = await graph_builder.get_edges(graph_id)
     return {"edges": [e.to_dict() for e in edges], "count": len(edges)}
 
 
 @router.get("/{graph_id}/entities/{entity_uuid}")
 async def get_entity(graph_id: str, entity_uuid: str):
     """Get entity with full context and relationships."""
-    entity = graph_builder.get_entity_with_context(graph_id, entity_uuid)
+    entity = await graph_builder.get_entity_with_context(graph_id, entity_uuid)
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     return entity.to_dict()
@@ -76,5 +76,5 @@ async def search_graph(graph_id: str, body: SearchRequest):
 @router.delete("/{graph_id}", status_code=204)
 async def delete_graph(graph_id: str):
     """Delete a knowledge graph."""
-    if not graph_builder.delete_graph(graph_id):
+    if not await graph_builder.delete_graph(graph_id):
         raise HTTPException(status_code=404, detail="Graph not found")
