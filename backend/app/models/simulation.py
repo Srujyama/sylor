@@ -215,3 +215,15 @@ class ContextAnalysisResponse(BaseModel):
     success_criteria: str
     time_horizon: int
     num_runs: int
+
+
+class PromptRequest(BaseModel):
+    """Free-text prompt for AI-generated simulation."""
+    prompt: str
+
+
+class PromptAnalysisResponse(ContextAnalysisResponse):
+    """Extends ContextAnalysisResponse with auto-detected category and name."""
+    category: str
+    name: str
+    description: str

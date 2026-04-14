@@ -288,6 +288,16 @@ export async function analyzeContext(data: any) {
   return res.json();
 }
 
+export async function analyzePrompt(prompt: string) {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/context/analyze-prompt`, {
+    method: "POST",
+    body: JSON.stringify({ prompt }),
+    timeout: 120000,
+    retries: 1,
+  });
+  return res.json();
+}
+
 export async function runSimulationLong(
   simId: string,
   opts?: { num_runs?: number; variable_overrides?: Record<string, number> }

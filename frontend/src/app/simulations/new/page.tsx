@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { analyzeContext, createSimulation, runSimulationLong } from "@/lib/api";
+import { analyzeContext, analyzePrompt, createSimulation, runSimulationLong } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { getCurrentUser } from "@/lib/firebase/auth";
 import type { SimulationCategory, AIAnalysisResponse } from "@/types";
@@ -98,6 +98,10 @@ export default function NewSimulationPage() {
   const [agents, setAgents] = useState<AIAnalysisResponse["agents"]>([]);
   const [numRuns, setNumRuns] = useState(1000);
   const [timeHorizon, setTimeHorizon] = useState(12);
+
+  // Prompt mode
+  const [inputMode, setInputMode] = useState<"prompt" | "form">("prompt");
+  const [promptText, setPromptText] = useState("");
 
   // Data upload
   const [uploadedData, setUploadedData] = useState<{ fileName: string; fileSize: string; rowCount: number; columns: Array<{ name: string; type: string; sample: string }> } | null>(null);
@@ -197,6 +201,83 @@ export default function NewSimulationPage() {
       setAnalysisProgress(0);
       setAnalysisStage("");
       setAnalysisError(e.message || "Failed to analyze context");
+      toast({ title: "Analysis failed", description: e.message || "Check your connection and try again", variant: "error" });
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  // ---------- prompt-based analysis ----------
+
+  async function runPromptAnalysis() {
+    if (!promptText.trim()) return;
+    setAnalyzing(true);
+    setAnalysisError("");
+    setAnalysisProgress(0);
+    setAnalysisStage("Reading your prompt...");
+
+    const stages: Array<{ at: number; label: string }> = [
+      { at: 900,  label: "Understanding your scenario..." },
+      { at: 2500, label: "Detecting simulation category..." },
+      { at: 5000, label: "Building variable model..." },
+      { at: 8000, label: "Configuring AI agents..." },
+      { at: 12000, label: "Calibrating parameters..." },
+      { at: 18000, label: "Generating assumptions..." },
+      { at: 25000, label: "Validating ranges..." },
+      { at: 35000, label: "Finalizing simulation config..." },
+    ];
+
+    const timers: NodeJS.Timeout[] = [];
+    stages.forEach(({ at, label }) => {
+      timers.push(setTimeout(() => setAnalysisStage(label), at));
+    });
+
+    let currentPct = 0;
+    const ticker = setInterval(() => {
+      setAnalysisProgress((prev) => {
+        const remaining = 94 - prev;
+        const increment = Math.max(0.15, remaining * 0.025);
+        currentPct = Math.min(94, prev + increment);
+        return currentPct;
+      });
+    }, 400);
+    timers.push(ticker);
+
+    try {
+      const raw = await analyzePrompt(promptText);
+      timers.forEach(clearTimeout);
+      clearInterval(ticker);
+      setAnalysisProgress(100);
+      setAnalysisStage("Analysis complete!");
+      await new Promise((r) => setTimeout(r, 300));
+
+      // Auto-fill name, category, description from AI response
+      setName(raw.name || "");
+      setDescription(raw.description || "");
+      setCategory((raw.category || "custom") as SimulationCategory);
+
+      const data: AIAnalysisResponse = {
+        variables: raw.variables ?? [],
+        agents: raw.agents ?? [],
+        assumptions: raw.assumptions ?? [],
+        successCriteria: raw.success_criteria ?? raw.successCriteria ?? "",
+        timeHorizon: raw.time_horizon ?? raw.timeHorizon ?? 12,
+        numRuns: raw.num_runs ?? raw.numRuns ?? 1000,
+      };
+
+      setAnalysis(data);
+      setVariables(data.variables);
+      setAgents(data.agents);
+      setNumRuns(data.numRuns);
+      setTimeHorizon(data.timeHorizon);
+      setStep(2);
+      toast({ title: "Simulation generated", description: `"${raw.name}" — ${data.variables.length} variables, ${data.agents.length} agents`, variant: "success" });
+    } catch (e: any) {
+      timers.forEach(clearTimeout);
+      clearInterval(ticker);
+      setAnalysisProgress(0);
+      setAnalysisStage("");
+      setAnalysisError(e.message || "Failed to analyze prompt");
       toast({ title: "Analysis failed", description: e.message || "Check your connection and try again", variant: "error" });
     } finally {
       setAnalyzing(false);
@@ -367,6 +448,91 @@ export default function NewSimulationPage() {
         <div className="animate-fade-in">
           <h2 className="text-xl font-semibold text-white mb-1">Tell us about your scenario</h2>
           <p className="text-xs text-white/35 mb-6">The more detail you provide, the more accurate your simulation will be.</p>
+
+          {/* Mode toggle */}
+          <div className="flex items-center gap-1 mb-6 p-0.5 bg-white/[0.03] border border-white/[0.06] w-fit">
+            <button
+              onClick={() => setInputMode("prompt")}
+              className={cn(
+                "px-4 py-1.5 text-xs transition-all",
+                inputMode === "prompt"
+                  ? "bg-white/10 text-white"
+                  : "text-white/30 hover:text-white/50"
+              )}
+            >
+              <Sparkles className="w-3 h-3 inline mr-1.5" />
+              Describe it
+            </button>
+            <button
+              onClick={() => setInputMode("form")}
+              className={cn(
+                "px-4 py-1.5 text-xs transition-all",
+                inputMode === "form"
+                  ? "bg-white/10 text-white"
+                  : "text-white/30 hover:text-white/50"
+              )}
+            >
+              Fill out form
+            </button>
+          </div>
+
+          {/* ---- PROMPT MODE ---- */}
+          {inputMode === "prompt" && (
+            <div className="space-y-4 mb-8">
+              <div>
+                <Label className="text-xs text-white/50 mb-2 block">Describe what you want to simulate</Label>
+                <textarea
+                  className="w-full border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/20 resize-none h-32"
+                  placeholder="e.g., I'm launching a B2B SaaS tool for restaurant inventory management. We have $200K in funding, 3 beta customers, and charge $99/mo. Main competitor is MarketMan. I want to know if we can reach $50K MRR in 18 months."
+                  value={promptText}
+                  onChange={(e) => setPromptText(e.target.value)}
+                />
+                <p className="text-[10px] text-white/15 mt-1.5">
+                  Include details like industry, funding, revenue, competitors, and what you want to find out. AI will auto-detect the category and generate everything.
+                </p>
+              </div>
+
+              {analyzing && (
+                <div className="surface p-8 flex flex-col items-center justify-center text-center">
+                  <Sparkles className="w-5 h-5 text-violet-400/60 mb-4" />
+                  <p className="text-sm text-white/70 mb-1 font-medium">Generating your simulation</p>
+                  <p className="text-xs text-white/30 mb-5">{analysisStage}</p>
+                  <div className="w-full max-w-sm mb-2">
+                    <Progress value={analysisProgress} className="h-1.5" />
+                  </div>
+                  <p className="text-[10px] text-white/20 tracking-widest">{analysisProgress}%</p>
+                </div>
+              )}
+
+              {analysisError && !analyzing && (
+                <div className="surface p-6">
+                  <div className="flex items-start gap-3 mb-3">
+                    <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm text-white mb-0.5">Generation failed</p>
+                      <p className="text-xs text-white/40">{analysisError}</p>
+                    </div>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={runPromptAnalysis}>
+                    <Loader2 className="w-3 h-3 mr-1" /> Retry
+                  </Button>
+                </div>
+              )}
+
+              <div className="flex justify-end">
+                <Button variant="gradient" onClick={runPromptAnalysis} disabled={!promptText.trim() || analyzing}>
+                  {analyzing ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</>
+                  ) : (
+                    <>Generate Simulation <Sparkles className="w-4 h-4" /></>
+                  )}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* ---- FORM MODE ---- */}
+          {inputMode === "form" && (<>
 
           {/* Category picker */}
           <div className="grid grid-cols-3 gap-px bg-white/[0.05] mb-8">
@@ -697,6 +863,8 @@ export default function NewSimulationPage() {
               Analyze with AI <Sparkles className="w-4 h-4" />
             </Button>
           </div>
+
+          </>)}
         </div>
       )}
 

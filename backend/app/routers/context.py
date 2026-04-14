@@ -8,7 +8,7 @@ import re
 import anthropic
 from fastapi import APIRouter, HTTPException
 from app.config import settings
-from app.models.simulation import CompanyContext, ContextAnalysisResponse
+from app.models.simulation import CompanyContext, ContextAnalysisResponse, PromptRequest, PromptAnalysisResponse
 
 router = APIRouter(prefix="/api/context", tags=["context"])
 
@@ -334,6 +334,105 @@ async def analyze_context(body: CompanyContext):
         data = _extract_json(text)
 
         return ContextAnalysisResponse(
+            variables=data.get("variables", []),
+            agents=data.get("agents", []),
+            assumptions=data.get("assumptions", []),
+            success_criteria=data.get("success_criteria", ""),
+            time_horizon=int(data.get("time_horizon", 12)),
+            num_runs=int(data.get("num_runs", 1000)),
+        )
+
+    except anthropic.APIError as e:
+        raise HTTPException(status_code=502, detail=f"Claude API error: {str(e)}")
+    except (json.JSONDecodeError, ValueError) as e:
+        raise HTTPException(status_code=502, detail=f"Failed to parse AI response: {str(e)}")
+
+
+@router.post("/analyze-prompt", response_model=PromptAnalysisResponse)
+async def analyze_prompt(body: PromptRequest):
+    """
+    Generate a full simulation from a free-text user prompt.
+    Claude auto-detects the best category, generates a name/description,
+    and produces the complete simulation config in one shot.
+    """
+
+    if not settings.anthropic_api_key:
+        raise HTTPException(status_code=500, detail="Anthropic API key not configured")
+
+    prompt = f"""You are a senior simulation strategist. A user wants to create a Monte Carlo simulation from a single prompt. Your job is to:
+1. Detect the best simulation category from: startup, pricing, policy, marketing, product, finance, biology, trend, custom
+2. Generate a short simulation name (under 60 chars) and a one-sentence description
+3. Generate a complete simulation configuration with variables, agents, and assumptions
+
+USER PROMPT:
+"{body.prompt}"
+
+Return a JSON object with this exact structure:
+{{
+  "category": "<one of: startup, pricing, policy, marketing, product, finance, biology, trend, custom>",
+  "name": "<short simulation name>",
+  "description": "<one-sentence description of what this simulates>",
+  "variables": [
+    {{
+      "name": "snake_case_var_name",
+      "label": "Human Readable Label",
+      "value": <realistic starting value>,
+      "min": <plausible minimum>,
+      "max": <plausible maximum>,
+      "unit": "$" | "%" | "users" | "months" | etc,
+      "reasoning": "Why this value (under 15 words)"
+    }}
+  ],
+  "agents": [
+    {{
+      "type": "customer|competitor|investor|regulator|market|trader|molecule|data_stream",
+      "label": "Agent Label",
+      "count": <number>,
+      "sensitivity": <0.0-1.0>,
+      "reasoning": "Why this config (under 15 words)"
+    }}
+  ],
+  "assumptions": ["assumption 1", "assumption 2", ...],
+  "success_criteria": "What constitutes success for this scenario",
+  "time_horizon": <months or periods as integer>,
+  "num_runs": <recommended Monte Carlo runs, 1000-5000>
+}}
+
+RULES:
+1. Generate 15-25 variables that are specific to the scenario described.
+2. All values must be grounded in the user's prompt — infer realistic numbers from context clues (industry, scale, stage).
+3. Ranges should be realistic (±50-200% of the starting value, not zero-to-infinity).
+4. Include 3-6 agents whose types match the detected category.
+5. Assumptions should list what you inferred when the user didn't provide exact data.
+6. Success criteria must be specific to this scenario.
+7. The name should be descriptive but concise — not generic."""
+
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+    try:
+        text_chunks: list[str] = []
+        async with client.messages.stream(
+            model="claude-sonnet-4-6",
+            max_tokens=8000,
+            system=(
+                "You are a simulation configuration generator. "
+                "You MUST respond with ONLY a single valid JSON object — "
+                "no markdown, no code fences, no comments, no explanation before or after. "
+                "The JSON must be syntactically valid and COMPLETE — never truncate. "
+                "Keep all 'reasoning' field values under 15 words to stay within token limits."
+            ),
+            messages=[{"role": "user", "content": prompt}],
+        ) as stream:
+            async for chunk in stream.text_stream:
+                text_chunks.append(chunk)
+
+        text = "".join(text_chunks)
+        data = _extract_json(text)
+
+        return PromptAnalysisResponse(
+            category=data.get("category", "custom"),
+            name=data.get("name", "Untitled Simulation"),
+            description=data.get("description", ""),
             variables=data.get("variables", []),
             agents=data.get("agents", []),
             assumptions=data.get("assumptions", []),
