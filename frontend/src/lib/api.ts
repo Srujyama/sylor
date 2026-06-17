@@ -5,6 +5,15 @@
 
 import { getApiUrl } from "./utils";
 import { auth } from "./firebase/client";
+import type {
+  RunProjectSimulationResponse, GenerateReportResponse,
+  TornadoResponse, WhatIfResponse, ShareResponse, SharedSnapshot,
+  RunHistoryEntry, AnalyticsSummary, PublicStats,
+  GenerateMemoResponse, MemoAudience, ScenarioTree, BranchSimulationResponse,
+  ReplayData, AgentTranscript, DemoPreset, DemoRunResponse, CopilotResponse,
+  DiffResponse, ExplainResponse, ExplainPercentile, DashboardDigest,
+  CalibrationResult, CausalGraph, InterventionResult,
+} from "@/types";
 
 interface FetchOptions extends RequestInit {
   retries?: number;
@@ -42,7 +51,22 @@ async function fetchWithRetry(
   url: string,
   options: FetchOptions = {}
 ): Promise<Response> {
-  const { retries = 2, retryDelay = 1500, timeout = 60000, skipAuth = false, ...fetchOpts } = options;
+  // Mutating methods default to 0 retries to avoid double-creates on timeout.
+  // GETs keep 2 retries. Callers can still override per-call via options.retries.
+  const method = (options.method || "GET").toUpperCase();
+  const isMutating = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
+  const {
+    retries = isMutating ? 0 : 2,
+    retryDelay = 1500,
+    timeout = 60000,
+    skipAuth = false,
+    ...fetchOpts
+  } = options;
+
+  // FormData bodies must NOT get a Content-Type header — the browser sets
+  // multipart/form-data with the boundary itself.
+  const isFormData =
+    typeof FormData !== "undefined" && fetchOpts.body instanceof FormData;
 
   // Attach Firebase auth token to every API request
   const authHeaders: Record<string, string> = {};
@@ -62,7 +86,7 @@ async function fetchWithRetry(
         ...fetchOpts,
         signal: controller.signal,
         headers: {
-          "Content-Type": "application/json",
+          ...(isFormData ? {} : { "Content-Type": "application/json" }),
           ...authHeaders,
           ...fetchOpts.headers,
         },
@@ -188,6 +212,34 @@ export async function sweepVariable(
       timeout: 300000,
       retries: 0,
     }
+  );
+  return res.json();
+}
+
+// ─── Scenario Tree (branching simulations) ────────────────
+
+// Creates a child sim (parent_id=simId, root_id inherited) from variable
+// overrides, run as a tracked background task; poll GET .../results like any run.
+export async function branchSimulation(
+  simId: string,
+  data: { variable_overrides: Record<string, number>; label?: string; num_runs?: number }
+): Promise<BranchSimulationResponse> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/branch`,
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+      timeout: 120000,
+      retries: 0, // don't retry — avoid double-creating branches
+    }
+  );
+  return res.json();
+}
+
+// Every sim sharing this sim's root_id (owner-scoped).
+export async function getScenarioTree(simId: string): Promise<ScenarioTree> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/tree`
   );
   return res.json();
 }
@@ -339,10 +391,16 @@ export async function parseUpload(file: File) {
 
   const res = await fetchWithRetry(`${getApiUrl()}/api/upload/parse`, {
     method: "POST",
-    body: formData,
-    headers: {}, // Let browser set content-type with boundary
+    body: formData, // FormData — fetchWithRetry omits Content-Type so the browser sets the boundary
     timeout: 30000,
   });
+  return res.json();
+}
+
+// ─── Users ────────────────────────────────────────────────
+
+export async function getUserUsage() {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/users/me/usage`);
   return res.json();
 }
 
@@ -380,8 +438,7 @@ export async function uploadDocuments(projectId: string, files: File[]) {
     `${getApiUrl()}/api/projects/${projectId}/upload`,
     {
       method: "POST",
-      body: formData,
-      headers: {}, // Let browser set content-type with boundary
+      body: formData, // FormData — fetchWithRetry omits Content-Type so the browser sets the boundary
       timeout: 60000,
     }
   );
@@ -442,6 +499,22 @@ export async function chatWithReport(projectId: string, message: string) {
       method: "POST",
       body: JSON.stringify({ message }),
       timeout: 60000,
+    }
+  );
+  return res.json();
+}
+
+export async function runProjectSimulation(
+  projectId: string,
+  opts?: { num_runs?: number; variable_overrides?: Record<string, number> }
+): Promise<RunProjectSimulationResponse> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/projects/${projectId}/run-simulation`,
+    {
+      method: "POST",
+      body: JSON.stringify(opts || {}),
+      timeout: 120000,
+      retries: 0, // don't retry — avoid double-running
     }
   );
   return res.json();
@@ -519,6 +592,21 @@ export async function getReportSections(reportId: string) {
   return res.json();
 }
 
+export async function generateReportAsync(data: {
+  simulation_id: string;
+  simulation_data: any;
+  category: string;
+  graph_id?: string;
+}): Promise<GenerateReportResponse> {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/reports/generate`, {
+    method: "POST",
+    body: JSON.stringify(data),
+    timeout: 60000,
+    retries: 0,
+  });
+  return res.json();
+}
+
 export async function generateReportSync(data: {
   simulation_id: string;
   simulation_data: any;
@@ -551,6 +639,304 @@ export async function chatWithReportDirect(
     }),
     timeout: 60000,
   });
+  return res.json();
+}
+
+// ─── Decision Memo ────────────────────────────────────────
+
+// Builds a fixed-section executive memo from a simulation's stored results.
+// Persists as a normal report doc (metadata.type="memo") pollable via the
+// existing report-progress endpoints and viewable at /reports/{report_id}.
+export async function generateMemo(
+  simulationId: string,
+  audience: MemoAudience = "exec"
+): Promise<GenerateMemoResponse> {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/reports/memo`, {
+    method: "POST",
+    body: JSON.stringify({ simulation_id: simulationId, audience }),
+    timeout: 120000,
+    retries: 0,
+  });
+  return res.json();
+}
+
+// ─── Sensitivity & What-If ────────────────────────────────
+
+export async function runTornado(
+  simId: string,
+  opts?: { delta_pct?: number; num_runs?: number }
+): Promise<TornadoResponse> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/tornado`,
+    {
+      method: "POST",
+      body: JSON.stringify(opts || {}),
+      timeout: 300000, // 2 runs per variable — can take minutes
+      retries: 0,      // don't retry — avoid double-running
+    }
+  );
+  return res.json();
+}
+
+export async function runWhatIf(
+  simId: string,
+  prompt: string
+): Promise<WhatIfResponse> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/whatif`,
+    {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
+      timeout: 300000, // paired base_seed re-run — can take minutes
+      retries: 0,      // don't retry — avoid double-running
+    }
+  );
+  return res.json();
+}
+
+// ─── Counterfactual Diff & Per-Run Explainer (Wave J) ─────
+
+// Paired runs with the SAME base_seed using DIRECT variable overrides (not a NL
+// prompt). Returns per-metric deltas, per-timeline-point revenue deltas, the set
+// difference of risk factors, and a plain-English attribution paragraph.
+export async function runDiff(
+  simId: string,
+  variable_overrides: Record<string, number>
+): Promise<DiffResponse> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/diff`,
+    {
+      method: "POST",
+      body: JSON.stringify({ variable_overrides }),
+      timeout: 300000, // paired base_seed re-run — can take minutes
+      retries: 0,      // don't retry — avoid double-running
+    }
+  );
+  return res.json();
+}
+
+// Replays the path nearest the requested percentile (p10/p50/p90) with the sim's
+// base_seed, then narrates WHY that path went the way it did. Expensive (LLM).
+export async function explainRun(
+  simId: string,
+  percentile: ExplainPercentile = "p50"
+): Promise<ExplainResponse> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/explain?percentile=${percentile}`,
+    {
+      timeout: 300000, // path scan + replay + LLM narration — can take minutes
+      retries: 0,      // don't retry — avoid duplicate LLM calls
+    }
+  );
+  return res.json();
+}
+
+// ─── Dashboard Digest (Wave J) ────────────────────────────
+
+// Cheap aggregation of the user's recent sim activity since their last visit,
+// turned into a single friendly headline by one LLM call (template fallback).
+export async function getDashboardDigest(
+  lastSeenAt?: string
+): Promise<DashboardDigest> {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/insights/digest`, {
+    method: "POST",
+    body: JSON.stringify(lastSeenAt ? { last_seen_at: lastSeenAt } : {}),
+    timeout: 60000,
+  });
+  return res.json();
+}
+
+// ─── Sharing ──────────────────────────────────────────────
+
+export async function shareSimulation(simId: string): Promise<ShareResponse> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/share`,
+    { method: "POST" }
+  );
+  return res.json();
+}
+
+export async function revokeShare(simId: string): Promise<void> {
+  // 204 No Content — nothing to parse
+  await fetchWithRetry(`${getApiUrl()}/api/simulations/${simId}/share`, {
+    method: "DELETE",
+  });
+}
+
+export async function getSharedSimulation(
+  shareId: string
+): Promise<SharedSnapshot> {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/shared/${shareId}`, {
+    skipAuth: true, // public endpoint
+  });
+  return res.json();
+}
+
+// ─── Run History ──────────────────────────────────────────
+
+export async function getSimulationRuns(
+  simId: string
+): Promise<{ runs: RunHistoryEntry[] }> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/runs`
+  );
+  return res.json();
+}
+
+// ─── Analytics ────────────────────────────────────────────
+
+export async function getAnalyticsSummary(): Promise<AnalyticsSummary> {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/analytics/summary`);
+  return res.json();
+}
+
+export async function getPublicStats(): Promise<PublicStats> {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/public/stats`, {
+    skipAuth: true, // public endpoint
+  });
+  return res.json();
+}
+
+// ─── Live Theater (replay + transcript) ──────────────────
+
+// One representative deterministic path re-run with the sim's stored base_seed,
+// captured per-step for animation. 404 if the sim has no results yet.
+export async function getReplay(simId: string): Promise<ReplayData> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/replay`
+  );
+  return res.json();
+}
+
+// Persona-voiced narrative of the captured path (one llm_client call, cached
+// server-side). 404 if no results. Falls back to a templated narrative server-side.
+export async function getTranscript(simId: string): Promise<AgentTranscript> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/transcript`,
+    { timeout: 120000, retries: 1 }
+  );
+  return res.json();
+}
+
+// ─── Zero-Signup Demo ─────────────────────────────────────
+
+// PUBLIC, IP-rate-limited. Runs a hardcoded preset inline (<=500 runs) and
+// returns real results WITHOUT persisting to a user.
+export async function runDemo(
+  preset: DemoPreset,
+  overrides?: Record<string, number>
+): Promise<DemoRunResponse> {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/demo/run`, {
+    method: "POST",
+    body: JSON.stringify({ preset, overrides: overrides || {} }),
+    timeout: 60000,
+    retries: 0, // don't retry — avoid double-running
+    skipAuth: true, // public endpoint — anon falls to per-IP tier
+  });
+  return res.json();
+}
+
+// AUTHED. Persists a previously-run demo as a normal owner-scoped simulation
+// for the now-signed-in user. Returns the new sim id.
+export async function claimDemo(data: {
+  demo_id: string;
+  config: Record<string, any>;
+  results: any;
+}): Promise<{ simulation_id: string }> {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/demo/claim`, {
+    method: "POST",
+    body: JSON.stringify(data),
+    timeout: 60000,
+    retries: 0,
+  });
+  return res.json();
+}
+
+// ─── AI Copilot (next experiments) ────────────────────────
+
+// Feeds the sim's results + variable list + run history to the LLM and returns
+// 3-5 typed next-experiment suggestions. Heuristic fallback server-side if the
+// LLM fails. Expensive — long timeout, no retries (avoid duplicate LLM calls).
+export async function getCopilotSuggestions(simId: string): Promise<CopilotResponse> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/copilot`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+      timeout: 120000,
+      retries: 0,
+    }
+  );
+  return res.json();
+}
+
+// ─── Bayesian Calibration (Wave L) ────────────────────────
+
+// Fits engine variables to a user's historical data via a LIGHTWEIGHT
+// moment-matching + conjugate-normal posterior update (NOT full MCMC).
+// observed = { column name -> observed series }; mapping is optional (observed
+// column name -> sim variable name) — absent, the server fuzzy-matches by name.
+// Expensive (server-side grid posterior); long timeout, no retries.
+export async function calibrateSimulation(
+  simId: string,
+  observed: Record<string, number[]>,
+  mapping?: Record<string, string>
+): Promise<CalibrationResult> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/calibrate`,
+    {
+      method: "POST",
+      body: JSON.stringify(mapping ? { observed, mapping } : { observed }),
+      timeout: 120000,
+      retries: 0,
+    }
+  );
+  return res.json();
+}
+
+// Writes the chosen posteriors back into the sim's config variable values.
+// posteriors = { variable_name -> posterior_value }.
+export async function applyCalibration(
+  simId: string,
+  posteriors: Record<string, number>
+): Promise<{ simulation_id: string }> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/calibrate/apply`,
+    {
+      method: "POST",
+      body: JSON.stringify({ posteriors }),
+    }
+  );
+  return res.json();
+}
+
+// ─── Causal Graph + Do-Operator (Wave L) ──────────────────
+
+// Loads the graph's causal-only DAG: nodes, signed directed edges, and a
+// cycle flag (cycles are broken for layering server-side).
+export async function getCausalGraph(graphId: string): Promise<CausalGraph> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/graphs/${graphId}/causal`
+  );
+  return res.json();
+}
+
+// Pearl-style do() on the causal DAG: clamps a node, propagates a signed,
+// decaying effect downstream, returns ranked predicted changes. Directional,
+// not point estimates. Expensive — long timeout, no retries.
+export async function interveneCausal(
+  graphId: string,
+  data: { node_uuid: string; direction: "increase" | "decrease"; magnitude?: number }
+): Promise<InterventionResult> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/graphs/${graphId}/intervene`,
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+      timeout: 60000,
+      retries: 0,
+    }
+  );
   return res.json();
 }
 

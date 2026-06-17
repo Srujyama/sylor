@@ -4,9 +4,11 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Network, Loader2, ChevronRight } from "lucide-react";
 import { listGraphs } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 import type { GraphStatistics } from "@/types";
 
 export default function GraphsPage() {
+  const { toast } = useToast();
   const [graphs, setGraphs] = useState<GraphStatistics[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -15,10 +17,13 @@ export default function GraphsPage() {
       try {
         const data = await listGraphs();
         setGraphs(data);
-      } catch {}
+      } catch (err: any) {
+        toast({ title: "failed to load knowledge graphs", description: err.message || "check your connection and try again", variant: "error" });
+      }
       setLoading(false);
     }
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

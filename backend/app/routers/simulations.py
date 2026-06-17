@@ -1,17 +1,27 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from typing import List, Optional, AsyncGenerator
+from typing import List, Optional, AsyncGenerator, Dict
 import uuid
 import json
 import asyncio
+import logging
+import math
+import random
+import numpy as np
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from app.models.simulation import (
     SimulationConfig, SimulationCreate, SimulationResponse,
     RunSimulationRequest, SimulationStatus, AgentType,
+    BranchSimulationRequest,
 )
-from app.services.simulation_engine import SimulationEngine
+from app.services.simulation_engine import SimulationEngine, EventSink
 from app.services.ai_insights import generate_ai_insights
+from app.services.calibration import calibrate as run_calibration
+from app.services.llm_client import llm_client
+from app.services.run_history import record_run, RUNS_COLLECTION
 from app.services.firebase_admin import (
     create_document, get_document, update_document, delete_document, query_collection, get_db,
 )
@@ -131,6 +141,10 @@ async def create_simulation(payload: SimulationCreate, user: dict = Depends(get_
         "created_at": now,
         "updated_at": now,
         "run_count": 0,
+        # Scenario tree: a freshly created sim is its own root.
+        "parent_id": None,
+        "root_id": sim_id,
+        "branch_label": None,
     }
 
     db = get_db()
@@ -229,62 +243,92 @@ async def run_simulation_stream(
     })
 
     async def stream_simulation() -> AsyncGenerator[str, None]:
-        try:
-            engine = SimulationEngine(config)
-            n = request.num_runs or config.num_runs
-            progress_queue: asyncio.Queue = asyncio.Queue()
+        n = request.num_runs or config.num_runs
+        # Queue carries (event_name, data) tuples; None is the end sentinel.
+        event_queue: asyncio.Queue = asyncio.Queue()
 
-            async def on_progress(completed: int, total: int):
-                pct = round(completed / total * 85)  # Reserve 15% for post-processing
-                await progress_queue.put(_sse_event("progress", {
-                    "percent": pct, "completed": completed, "total": total, "phase": "running"
+        async def on_progress(completed: int, total: int):
+            pct = round(completed / total * 85)  # Reserve 15% for post-processing
+            await event_queue.put(("progress", {
+                "percent": pct, "completed": completed, "total": total, "phase": "running"
+            }))
+
+        async def run_engine():
+            """Run the engine, pushing events onto the queue AS THEY HAPPEN."""
+            try:
+                engine = SimulationEngine(config)
+                results = await engine.run(
+                    num_runs=n,
+                    variable_overrides=request.variable_overrides,
+                    progress_callback=on_progress,
+                )
+
+                await event_queue.put(("progress", {
+                    "percent": 90, "completed": n, "total": n, "phase": "ai_insights"
                 }))
 
-            yield _sse_event("progress", {"percent": 0, "completed": 0, "total": n, "phase": "running"})
+                # AI insights
+                try:
+                    ai_data = await generate_ai_insights(config, results, company_context=config.company_context)
+                    results.key_insights = ai_data.get("key_insights", results.key_insights)
+                    results.success_explanation = ai_data.get("success_pattern", results.success_explanation)
+                    results.failure_explanation = ai_data.get("failure_pattern", results.failure_explanation)
+                except Exception as exc:
+                    logger.warning("AI insights generation failed for simulation %s: %s", sim_id, exc)
 
-            # Run simulation with progress callback
-            results = await engine.run(
-                num_runs=n,
-                variable_overrides=request.variable_overrides,
-                progress_callback=on_progress,
-            )
+                await event_queue.put(("progress", {
+                    "percent": 98, "completed": n, "total": n, "phase": "saving"
+                }))
 
-            # Drain queued progress events
-            while not progress_queue.empty():
-                yield await progress_queue.get()
+                # Save to Firestore
+                doc = await get_document(COLLECTION, sim_id)
+                run_count = (doc.get("run_count", 0) if doc else 0) + 1
+                await update_document(COLLECTION, sim_id, {
+                    "status": SimulationStatus.COMPLETED.value,
+                    "results": results.model_dump(mode="json"),
+                    "run_count": run_count,
+                    "updated_at": datetime.utcnow().isoformat(),
+                })
 
-            yield _sse_event("progress", {"percent": 90, "completed": n, "total": n, "phase": "ai_insights"})
+                # Record run history (best-effort, never raises)
+                await record_run(
+                    sim_id, sim.get("user_id"), n, results,
+                    variable_overrides=request.variable_overrides,
+                )
 
-            # AI insights
-            try:
-                ai_data = await generate_ai_insights(config, results, company_context=config.company_context)
-                results.key_insights = ai_data.get("key_insights", results.key_insights)
-                results.success_explanation = ai_data.get("success_pattern", results.success_explanation)
-                results.failure_explanation = ai_data.get("failure_pattern", results.failure_explanation)
-            except Exception:
-                pass
+                await event_queue.put(("complete", {
+                    "sim_id": sim_id, "success_probability": results.success_probability
+                }))
 
-            yield _sse_event("progress", {"percent": 98, "completed": n, "total": n, "phase": "saving"})
+            except Exception as e:
+                await update_document(COLLECTION, sim_id, {
+                    "status": SimulationStatus.FAILED.value,
+                    "error": str(e),
+                    "updated_at": datetime.utcnow().isoformat(),
+                })
+                await event_queue.put(("error", {"detail": str(e)}))
+            finally:
+                await event_queue.put(None)  # end sentinel
 
-            # Save to Firestore
-            doc = await get_document(COLLECTION, sim_id)
-            run_count = (doc.get("run_count", 0) if doc else 0) + 1
-            await update_document(COLLECTION, sim_id, {
-                "status": SimulationStatus.COMPLETED.value,
-                "results": results.model_dump(mode="json"),
-                "run_count": run_count,
-                "updated_at": datetime.utcnow().isoformat(),
-            })
+        # Start the engine as a concurrent task and stream events as they arrive.
+        engine_task = asyncio.create_task(run_engine())
 
-            yield _sse_event("complete", {"sim_id": sim_id, "success_probability": results.success_probability})
+        yield _sse_event("progress", {"percent": 0, "completed": 0, "total": n, "phase": "running"})
 
-        except Exception as e:
-            await update_document(COLLECTION, sim_id, {
-                "status": SimulationStatus.FAILED.value,
-                "error": str(e),
-                "updated_at": datetime.utcnow().isoformat(),
-            })
-            yield _sse_event("error", {"detail": str(e)})
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(event_queue.get(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    # Keep the connection alive during long silent stretches.
+                    yield ": heartbeat\n\n"
+                    continue
+                if item is None:
+                    break
+                event_name, data = item
+                yield _sse_event(event_name, data)
+        finally:
+            await engine_task
 
     return StreamingResponse(
         stream_simulation(),
@@ -312,8 +356,8 @@ async def _execute_simulation(
             results.key_insights = ai_data.get("key_insights", results.key_insights)
             results.success_explanation = ai_data.get("success_pattern", results.success_explanation)
             results.failure_explanation = ai_data.get("failure_pattern", results.failure_explanation)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("AI insights generation failed for simulation %s: %s", sim_id, exc)
 
         doc = await get_document(COLLECTION, sim_id)
         run_count = (doc.get("run_count", 0) if doc else 0) + 1
@@ -324,6 +368,15 @@ async def _execute_simulation(
             "run_count": run_count,
             "updated_at": datetime.utcnow().isoformat(),
         })
+
+        # Record run history (best-effort, never raises)
+        await record_run(
+            sim_id,
+            doc.get("user_id") if doc else None,
+            num_runs or config.num_runs,
+            results,
+            variable_overrides=variable_overrides,
+        )
 
     except Exception as e:
         await update_document(COLLECTION, sim_id, {
@@ -345,6 +398,337 @@ async def get_results(sim_id: str, user: dict = Depends(get_current_user)):
     return {"status": sim["status"], "results": sim.get("results")}
 
 
+# ── Theater replay (one captured deterministic path) ─────────────────────────
+
+def _build_replay(sim: dict) -> dict:
+    """Re-run ONE seeded path with an event sink and shape the replay payload.
+
+    Uses the sim's recorded ``results.base_seed`` so the captured path is one of
+    the real Monte Carlo paths (path 0). This is a single cheap deterministic
+    run, NOT the full Monte Carlo.
+    """
+    config = SimulationConfig(**sim["config"])
+    base_seed = _resolve_base_seed(sim)
+    engine = SimulationEngine(config)
+    return engine.replay_path(base_seed, path_index=0)
+
+
+@router.get("/{sim_id}/replay")
+async def get_replay(sim_id: str, user: dict = Depends(get_current_user)):
+    """Return one representative seeded path captured for animation.
+
+    Re-runs a single deterministic path with the sim's stored base_seed and an
+    event sink. The built replay is cached on the sim doc (``results.replay``)
+    so repeat GETs do not recompute. 404 if the sim has no results yet.
+    """
+    sim = await get_document(COLLECTION, sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if sim.get("user_id") != user["uid"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    results = sim.get("results")
+    if not isinstance(results, dict):
+        raise HTTPException(status_code=404, detail="Simulation has no results yet")
+
+    cached = results.get("replay")
+    if isinstance(cached, dict) and cached.get("ticks"):
+        return cached
+
+    replay = _build_replay(sim)
+
+    # Cache onto the sim doc so repeat GETs don't recompute.
+    results = dict(results)
+    results["replay"] = replay
+    try:
+        await update_document(COLLECTION, sim_id, {"results": results})
+    except Exception as exc:
+        logger.warning("Failed to cache replay for simulation %s: %s", sim_id, exc)
+
+    return replay
+
+
+# ── Agent transcript (persona-voiced narrative of the captured path) ─────────
+
+_TRANSCRIPT_SYSTEM = (
+    "You are a narrator turning a multi-agent simulation's event log into a "
+    "short, vivid play-by-play. Each step has agent actions; voice the named "
+    "agents as characters (e.g. 'Users surged in', 'Rival cut prices'). "
+    'Respond with JSON of the shape {"transcript": [{"t": <step number>, '
+    '"narrative": "<one or two sentences>"}], "summary": "<2-3 sentence overall '
+    'arc>"}. Keep each step narrative under 240 characters. Use the agent names '
+    "and types provided; do not invent agents."
+)
+
+
+def _fallback_transcript(replay: dict) -> dict:
+    """Deterministic templated narrative when the LLM is unavailable."""
+    name_by_id = {a["id"]: a.get("name") or a.get("type") for a in replay.get("agents", [])}
+    time_unit = replay.get("time_unit", "step")
+    transcript = []
+    for tick in replay.get("ticks", []):
+        parts = []
+        for ev in tick.get("events", [])[:4]:
+            who = name_by_id.get(ev["agent_id"], ev.get("agent_type", "agent"))
+            parts.append(f"{who} {ev['action']} ({ev['value']:g})")
+        metrics = tick.get("metrics", {})
+        narrative = (
+            f"{time_unit.capitalize()} {tick['t']}: " + "; ".join(parts) + ". "
+            f"Revenue {metrics.get('revenue', 0):,.0f}, "
+            f"customers {metrics.get('customers', 0):,.0f}."
+        )
+        transcript.append({"t": tick["t"], "narrative": narrative})
+    summary = (
+        f"Across {len(transcript)} {time_unit}s the agents interacted to shape the "
+        "outcome shown in the metrics above."
+    )
+    return {"transcript": transcript, "summary": summary}
+
+
+@router.get("/{sim_id}/transcript")
+async def get_transcript(sim_id: str, user: dict = Depends(get_current_user)):
+    """Return a persona-voiced narrative of the captured path.
+
+    Builds the event log (same as /replay), then makes ONE llm_client.chat_json
+    call to turn the per-step events into a narrative + summary. Cached on the
+    sim doc (``results.transcript``). Falls back to a templated narrative if the
+    LLM fails (still 200). 404 if no results.
+    """
+    sim = await get_document(COLLECTION, sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if sim.get("user_id") != user["uid"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    results = sim.get("results")
+    if not isinstance(results, dict):
+        raise HTTPException(status_code=404, detail="Simulation has no results yet")
+
+    cached = results.get("transcript")
+    if isinstance(cached, dict) and cached.get("transcript"):
+        return cached
+
+    # Reuse the cached replay event log when present, else build it.
+    replay = results.get("replay")
+    if not (isinstance(replay, dict) and replay.get("ticks")):
+        replay = _build_replay(sim)
+
+    transcript = _fallback_transcript(replay)
+    try:
+        agents_desc = [
+            {"id": a["id"], "name": a.get("name"), "type": a.get("type")}
+            for a in replay.get("agents", [])
+        ]
+        # Trim each tick's events to keep the prompt compact.
+        ticks_desc = [
+            {"t": tk["t"], "events": tk.get("events", []), "metrics": tk.get("metrics", {})}
+            for tk in replay.get("ticks", [])
+        ]
+        parsed = await llm_client.chat_json(
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Simulation: {sim.get('name', 'Simulation')} "
+                    f"(category {sim.get('category')}, time unit {replay.get('time_unit')}).\n"
+                    f"Agents:\n{json.dumps(agents_desc)}\n\n"
+                    f"Event log per step:\n{json.dumps(ticks_desc)}"
+                ),
+            }],
+            system=_TRANSCRIPT_SYSTEM,
+            temperature=0.6,
+            max_tokens=2048,
+        )
+        steps = parsed.get("transcript")
+        if isinstance(steps, list) and steps:
+            cleaned = []
+            for s in steps:
+                if isinstance(s, dict) and s.get("narrative"):
+                    cleaned.append({
+                        "t": int(s.get("t", len(cleaned) + 1)),
+                        "narrative": str(s["narrative"]),
+                    })
+            if cleaned:
+                transcript = {
+                    "transcript": cleaned,
+                    "summary": str(parsed.get("summary") or transcript["summary"]),
+                }
+    except Exception as exc:
+        logger.warning("Transcript generation failed for simulation %s: %s", sim_id, exc)
+
+    # Cache onto the sim doc.
+    results = dict(results)
+    results["transcript"] = transcript
+    try:
+        await update_document(COLLECTION, sim_id, {"results": results})
+    except Exception as exc:
+        logger.warning("Failed to cache transcript for simulation %s: %s", sim_id, exc)
+
+    return transcript
+
+
+# ── AI copilot (next-experiment suggestions) ─────────────────────────────────
+
+_COPILOT_SYSTEM = (
+    "You are an experiment-design copilot for a Monte Carlo simulation tool. "
+    "Given a simulation's results summary, its variables, and its run history, "
+    "propose 3-5 high-value next experiments. Each suggestion has a typed action "
+    "the UI maps onto an existing endpoint. Allowed types: 'sweep' (vary one "
+    "variable across a range), 'branch' (apply variable overrides as a new "
+    "scenario), 'whatif' (a natural-language scenario prompt), 'compare' "
+    "(compare existing runs). Respond with JSON of the shape "
+    '{"suggestions": [{"type": "sweep"|"branch"|"whatif"|"compare", "title": '
+    '"<short>", "rationale": "<why>", "action": {"variable_name"?: str, '
+    '"min_value"?: number, "max_value"?: number, "variable_overrides"?: '
+    '{<name>: number}, "prompt"?: str}}]}. Only use variable names from the '
+    "provided list. Sweep actions need variable_name+min_value+max_value; "
+    "branch actions need variable_overrides; whatif actions need prompt."
+)
+
+_VALID_COPILOT_TYPES = {"sweep", "branch", "whatif", "compare"}
+
+
+def _heuristic_suggestions(config: SimulationConfig, results: Optional[dict]) -> List[dict]:
+    """Deterministic fallback suggestions (2-3) when the LLM is unavailable."""
+    numeric = [v for v in config.variables if v.type in _NUMERIC_VARIABLE_TYPES]
+    suggestions: List[dict] = []
+    if numeric:
+        v = numeric[0]
+        lo = v.min if v.min is not None else v.value * 0.5
+        hi = v.max if v.max is not None else v.value * 1.5
+        suggestions.append({
+            "type": "sweep",
+            "title": f"Sweep {v.label}",
+            "rationale": (
+                f"{v.label} is a primary lever; sweeping it from {lo:g} to {hi:g} "
+                "reveals where success probability turns."
+            ),
+            "action": {
+                "variable_name": v.name,
+                "min_value": round(float(lo), 4),
+                "max_value": round(float(hi), 4),
+            },
+        })
+        suggestions.append({
+            "type": "branch",
+            "title": f"Branch: {v.label} +20%",
+            "rationale": f"Test a concrete scenario where {v.label} is 20% higher.",
+            "action": {"variable_overrides": {v.name: round(float(v.value) * 1.2, 4)}},
+        })
+        suggestions.append({
+            "type": "branch",
+            "title": f"Branch: {v.label} -20%",
+            "rationale": f"Test a concrete scenario where {v.label} is 20% lower.",
+            "action": {"variable_overrides": {v.name: round(float(v.value) * 0.8, 4)}},
+        })
+    else:
+        suggestions.append({
+            "type": "whatif",
+            "title": "Explore a downside scenario",
+            "rationale": "No numeric variables to sweep; describe a stress scenario in words.",
+            "action": {"prompt": "What if demand dropped sharply?"},
+        })
+        suggestions.append({
+            "type": "compare",
+            "title": "Compare against a baseline run",
+            "rationale": "Compare this simulation's outcome with another saved run.",
+            "action": {},
+        })
+    return suggestions[:3]
+
+
+@router.post("/{sim_id}/copilot", dependencies=[Depends(require_expensive_rate_limit)])
+async def copilot_suggestions(sim_id: str, user: dict = Depends(get_current_user)):
+    """Suggest 3-5 typed next experiments for a simulation.
+
+    Feeds the results summary, variable list, and run history to the LLM. Falls
+    back to 2-3 heuristic suggestions when the LLM fails. Owner-scoped.
+    """
+    sim = await get_document(COLLECTION, sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if sim.get("user_id") != user["uid"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    config = SimulationConfig(**sim["config"])
+    results = sim.get("results") if isinstance(sim.get("results"), dict) else None
+
+    variables_desc = [
+        {"name": v.name, "label": v.label, "value": v.value,
+         "min": v.min, "max": v.max, "type": v.type}
+        for v in config.variables
+    ]
+    results_summary = {}
+    if results:
+        results_summary = {
+            "success_probability": results.get("success_probability"),
+            "avg_revenue": results.get("avg_revenue"),
+            "avg_market_share": results.get("avg_market_share"),
+            "confidence_interval": results.get("confidence_interval"),
+            "key_insights": results.get("key_insights"),
+        }
+
+    # Run history (best-effort).
+    run_history = []
+    try:
+        runs = await query_collection(RUNS_COLLECTION, [("simulation_id", "==", sim_id)])
+        runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+        run_history = [
+            {"success_probability": r.get("success_probability"),
+             "avg_revenue": r.get("avg_revenue"),
+             "variable_overrides": r.get("variable_overrides")}
+            for r in runs[:10]
+        ]
+    except Exception as exc:
+        logger.warning("Copilot run-history fetch failed for simulation %s: %s", sim_id, exc)
+
+    valid_names = {v.name for v in config.variables}
+    suggestions: List[dict] = []
+    try:
+        parsed = await llm_client.chat_json(
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Simulation: {sim.get('name', 'Simulation')} "
+                    f"(category {sim.get('category')}).\n"
+                    f"Variables:\n{json.dumps(variables_desc, indent=2)}\n\n"
+                    f"Results summary:\n{json.dumps(results_summary, indent=2)}\n\n"
+                    f"Run history:\n{json.dumps(run_history, indent=2)}"
+                ),
+            }],
+            system=_COPILOT_SYSTEM,
+            temperature=0.5,
+            max_tokens=2048,
+        )
+        for s in (parsed.get("suggestions") or []):
+            if not isinstance(s, dict):
+                continue
+            stype = s.get("type")
+            if stype not in _VALID_COPILOT_TYPES:
+                continue
+            action = s.get("action") if isinstance(s.get("action"), dict) else {}
+            # Drop sweep/branch actions that reference unknown variables.
+            if stype == "sweep" and action.get("variable_name") not in valid_names:
+                continue
+            if stype == "branch":
+                overrides = action.get("variable_overrides")
+                if not isinstance(overrides, dict) or not (set(overrides) <= valid_names):
+                    continue
+            suggestions.append({
+                "type": stype,
+                "title": str(s.get("title") or stype.capitalize()),
+                "rationale": str(s.get("rationale") or ""),
+                "action": action,
+            })
+        suggestions = suggestions[:5]
+    except Exception as exc:
+        logger.warning("Copilot suggestion generation failed for simulation %s: %s", sim_id, exc)
+
+    if len(suggestions) < 3:
+        suggestions = _heuristic_suggestions(config, results)
+
+    return {"suggestions": suggestions}
+
+
 @router.post("/{sim_id}/duplicate")
 async def duplicate_simulation(sim_id: str, user: dict = Depends(get_current_user)):
     sim = await get_document(COLLECTION, sim_id)
@@ -364,10 +748,127 @@ async def duplicate_simulation(sim_id: str, user: dict = Depends(get_current_use
     new_sim["created_at"] = now
     new_sim["updated_at"] = now
     new_sim["run_count"] = 0
+    # Scenario tree: the copy is a child of the source, inheriting its root.
+    new_sim["parent_id"] = sim_id
+    new_sim["root_id"] = sim.get("root_id") or sim_id
+    new_sim["branch_label"] = "copy"
 
     db = get_db()
     await db.collection(COLLECTION).document(new_id).set(new_sim)
     return new_sim
+
+
+@router.post("/{sim_id}/branch", status_code=201,
+             dependencies=[Depends(require_expensive_rate_limit)])
+async def branch_simulation(
+    sim_id: str,
+    request: BranchSimulationRequest,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
+    """Create a child simulation that applies *variable_overrides* on top of the
+    parent's config, then runs it in a tracked background task.
+
+    The new sim's parent_id is *sim_id* and it inherits the parent's root_id.
+    Pollable at GET /api/simulations/{id}/results like any run.
+    """
+    _validate_num_runs(request.num_runs)
+
+    parent = await get_document(COLLECTION, sim_id)
+    if not parent:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if parent.get("user_id") != user["uid"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Validate overrides against the parent's config, then bake them into the
+    # child's config so the branch carries its scenario as a first-class sim.
+    parent_config = SimulationConfig(**parent["config"])
+    _validate_variable_overrides(request.variable_overrides, parent_config)
+
+    config_dict = parent_config.model_dump()
+    for var in config_dict.get("variables", []):
+        if var.get("name") in request.variable_overrides:
+            var["value"] = request.variable_overrides[var["name"]]
+    child_config = SimulationConfig(**config_dict)
+
+    new_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    label = _sanitize_string(request.label, _MAX_NAME_LENGTH) or "branch"
+    child = {
+        "id": new_id,
+        "user_id": user["uid"],
+        "name": f"{parent.get('name', 'Simulation')} — {label}",
+        "description": parent.get("description"),
+        "category": child_config.category.value,
+        "config": child_config.model_dump(mode="json"),
+        "status": SimulationStatus.RUNNING.value,
+        "results": None,
+        "created_at": now,
+        "updated_at": now,
+        "run_count": 0,
+        "parent_id": sim_id,
+        "root_id": parent.get("root_id") or sim_id,
+        "branch_label": label,
+    }
+
+    db = get_db()
+    await db.collection(COLLECTION).document(new_id).set(child)
+
+    # Run exactly like the regular run path: status running -> completed,
+    # results written, run history recorded. Overrides are already baked into
+    # the child's config, so the engine runs the branch scenario directly.
+    background_tasks.add_task(
+        _execute_simulation,
+        new_id,
+        child_config,
+        request.num_runs,
+        None,
+    )
+
+    return {"simulation_id": new_id}
+
+
+@router.get("/{sim_id}/tree")
+async def get_simulation_tree(sim_id: str, user: dict = Depends(get_current_user)):
+    """Return every owner-scoped simulation sharing this sim's root_id."""
+    sim = await get_document(COLLECTION, sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if sim.get("user_id") != user["uid"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    root_id = sim.get("root_id") or sim.get("id") or sim_id
+    family = await query_collection(
+        COLLECTION,
+        [("root_id", "==", root_id), ("user_id", "==", user["uid"])],
+    )
+
+    def _to_node(s: dict) -> dict:
+        return {
+            "id": s.get("id"),
+            "name": s.get("name"),
+            "parent_id": s.get("parent_id"),
+            "branch_label": s.get("branch_label"),
+            "status": s.get("status"),
+            "success_probability": (
+                s["results"].get("success_probability")
+                if isinstance(s.get("results"), dict) else None
+            ),
+            "created_at": s.get("created_at"),
+        }
+
+    nodes = [_to_node(s) for s in family]
+
+    # Legacy simulations created before the scenario-tree feature have no
+    # ``root_id`` field, so an equality query on root_id never matches them and
+    # the root would be missing from its own tree. Ensure the entry sim is
+    # always present (it's already fetched and ownership-checked above).
+    if not any(n["id"] == sim.get("id") for n in nodes):
+        nodes.append(_to_node(sim))
+
+    nodes.sort(key=lambda n: n.get("created_at") or "")
+
+    return {"root_id": root_id, "nodes": nodes}
 
 
 @router.delete("/{sim_id}", status_code=204)
@@ -437,6 +938,824 @@ async def sweep_variable(
         ))
 
     return points
+
+
+# ── Tornado sensitivity analysis ─────────────────────────────────────────────
+
+_NUMERIC_VARIABLE_TYPES = {"number", "percentage", "currency"}
+_TORNADO_MAX_VARIABLES = 12
+
+
+class TornadoRequest(BaseModel):
+    delta_pct: float = Field(default=20, ge=5, le=50)
+    num_runs: int = Field(default=200, ge=50, le=1000)
+
+
+def _resolve_base_seed(sim: dict) -> int:
+    """Reuse the sim's recorded base_seed when present, else generate one."""
+    results = sim.get("results")
+    if isinstance(results, dict) and results.get("base_seed") is not None:
+        return int(results["base_seed"])
+    return random.randrange(2 ** 32)
+
+
+@router.post("/{sim_id}/tornado", dependencies=[Depends(require_expensive_rate_limit)])
+async def tornado_analysis(
+    sim_id: str,
+    request: TornadoRequest,
+    user: dict = Depends(get_current_user),
+):
+    """One-variable-at-a-time sensitivity (tornado chart).
+
+    For each numeric variable, runs the engine at value*(1±delta) — clamped to
+    the variable's min/max — with the SAME base_seed so differences are signal,
+    not Monte Carlo noise. Runs sequentially to bound memory.
+    """
+    sim = await get_document(COLLECTION, sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if sim.get("user_id") != user["uid"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    config = SimulationConfig(**sim["config"])
+    numeric_vars = [
+        v for v in config.variables if v.type in _NUMERIC_VARIABLE_TYPES
+    ][:_TORNADO_MAX_VARIABLES]
+    if not numeric_vars:
+        raise HTTPException(
+            status_code=422,
+            detail="Simulation has no numeric variables to analyze.",
+        )
+
+    base_seed = _resolve_base_seed(sim)
+    delta = request.delta_pct / 100
+    engine = SimulationEngine(config)
+
+    baseline = await engine.run(num_runs=request.num_runs, base_seed=base_seed)
+
+    bars = []
+    for v in numeric_vars:
+        low_value = v.value * (1 - delta)
+        high_value = v.value * (1 + delta)
+        if v.min is not None:
+            low_value = max(v.min, low_value)
+            high_value = max(v.min, high_value)
+        if v.max is not None:
+            low_value = min(v.max, low_value)
+            high_value = min(v.max, high_value)
+
+        low_res = await engine.run(
+            num_runs=request.num_runs,
+            variable_overrides={v.name: low_value},
+            base_seed=base_seed,
+        )
+        high_res = await engine.run(
+            num_runs=request.num_runs,
+            variable_overrides={v.name: high_value},
+            base_seed=base_seed,
+        )
+        low_success = round(low_res.success_probability / 100, 4)
+        high_success = round(high_res.success_probability / 100, 4)
+        bars.append({
+            "variable": v.name,
+            "label": v.label,
+            "low_value": round(low_value, 6),
+            "high_value": round(high_value, 6),
+            "low_success": low_success,
+            "high_success": high_success,
+            "impact": round(abs(high_success - low_success), 4),
+        })
+
+    bars.sort(key=lambda b: b["impact"], reverse=True)
+    logger.info(
+        "Tornado analysis for simulation %s: %d variables, %d runs each",
+        sim_id, len(bars), request.num_runs,
+    )
+
+    return {
+        "base_seed": base_seed,
+        "baseline": {
+            "success_probability": round(baseline.success_probability / 100, 4),
+            "avg_revenue": baseline.avg_revenue,
+        },
+        "bars": bars,
+    }
+
+
+# ── Natural-language what-if analysis ────────────────────────────────────────
+
+class WhatIfRequest(BaseModel):
+    prompt: str = Field(min_length=3, max_length=500)
+
+
+_WHATIF_PARSE_SYSTEM = (
+    "You translate natural-language what-if scenarios into numeric overrides for "
+    "simulation variables. Only use variable names from the provided list. "
+    'Respond with JSON of the shape {"variable_overrides": {"<variable_name>": '
+    '<new_numeric_value>}, "unparseable_parts": ["<any part of the request you '
+    'could not map to a listed variable>"]}. Values must be plain numbers (no '
+    "units, no strings). Interpret relative changes (e.g. 'double the price', "
+    "'cut churn by half') against the variable's current value."
+)
+
+
+@router.post("/{sim_id}/whatif", dependencies=[Depends(require_expensive_rate_limit)])
+async def whatif_analysis(
+    sim_id: str,
+    request: WhatIfRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Parse a natural-language what-if prompt and run a paired comparison.
+
+    Baseline and what-if runs share the SAME base_seed so the deltas are
+    signal rather than Monte Carlo noise.
+    """
+    sim = await get_document(COLLECTION, sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if sim.get("user_id") != user["uid"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    config = SimulationConfig(**sim["config"])
+    variables_desc = [
+        {
+            "name": v.name,
+            "label": v.label,
+            "current_value": v.value,
+            "min": v.min,
+            "max": v.max,
+            "unit": v.unit,
+        }
+        for v in config.variables
+    ]
+
+    try:
+        parsed_raw = await llm_client.chat_json(
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Simulation variables:\n{json.dumps(variables_desc, indent=2)}\n\n"
+                    f"What-if request: {request.prompt}"
+                ),
+            }],
+            system=_WHATIF_PARSE_SYSTEM,
+            temperature=0.2,
+            max_tokens=1024,
+        )
+    except Exception as exc:
+        logger.warning("What-if prompt parsing failed for simulation %s: %s", sim_id, exc)
+        raise HTTPException(
+            status_code=502,
+            detail="What-if parsing is temporarily unavailable. Please try again.",
+        )
+
+    valid_names = {v.name for v in config.variables}
+    overrides: Dict[str, float] = {}
+    unparseable = [str(p) for p in (parsed_raw.get("unparseable_parts") or [])]
+    for key, value in (parsed_raw.get("variable_overrides") or {}).items():
+        try:
+            if key in valid_names:
+                overrides[key] = float(value)
+            else:
+                unparseable.append(f"{key}={value}")
+        except (TypeError, ValueError):
+            unparseable.append(f"{key}={value}")
+
+    if not overrides:
+        raise HTTPException(
+            status_code=422,
+            detail="No variable changes could be parsed from the prompt. "
+                   "Try referencing specific simulation variables.",
+        )
+
+    base_seed = _resolve_base_seed(sim)
+    n = min(config.num_runs, 1000)
+    engine = SimulationEngine(config)
+
+    baseline_res = await engine.run(num_runs=n, base_seed=base_seed)
+    whatif_res = await engine.run(
+        num_runs=n, variable_overrides=overrides, base_seed=base_seed
+    )
+
+    baseline = {
+        "success_probability": baseline_res.success_probability,
+        "avg_revenue": baseline_res.avg_revenue,
+        "avg_time_to_breakeven": baseline_res.avg_breakeven_month,
+    }
+    whatif = {
+        "success_probability": whatif_res.success_probability,
+        "avg_revenue": whatif_res.avg_revenue,
+        "avg_time_to_breakeven": whatif_res.avg_breakeven_month,
+    }
+    deltas = {
+        "success_probability_pp": round(
+            whatif_res.success_probability - baseline_res.success_probability, 2
+        ),
+        "avg_revenue": round(whatif_res.avg_revenue - baseline_res.avg_revenue, 2),
+        "avg_time_to_breakeven": round(
+            whatif_res.avg_breakeven_month - baseline_res.avg_breakeven_month, 2
+        ),
+    }
+
+    # One-sentence verdict (LLM, with deterministic template fallback).
+    pp = deltas["success_probability_pp"]
+    if pp > 0:
+        fallback_verdict = (
+            f"This scenario raises the success probability from "
+            f"{baseline['success_probability']:.1f}% to {whatif['success_probability']:.1f}% "
+            f"({pp:+.1f} pp) and shifts average revenue by {deltas['avg_revenue']:+,.0f}."
+        )
+    elif pp < 0:
+        fallback_verdict = (
+            f"This scenario lowers the success probability from "
+            f"{baseline['success_probability']:.1f}% to {whatif['success_probability']:.1f}% "
+            f"({pp:+.1f} pp) and shifts average revenue by {deltas['avg_revenue']:+,.0f}."
+        )
+    else:
+        fallback_verdict = (
+            f"This scenario leaves the success probability unchanged at "
+            f"{whatif['success_probability']:.1f}%, with average revenue shifting by "
+            f"{deltas['avg_revenue']:+,.0f}."
+        )
+
+    verdict = fallback_verdict
+    try:
+        verdict_resp = await llm_client.chat(
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Baseline simulation: success {baseline['success_probability']:.1f}%, "
+                    f"avg revenue {baseline['avg_revenue']:,.0f}, "
+                    f"breakeven month {baseline['avg_time_to_breakeven']:.1f}. "
+                    f"What-if scenario ({overrides}): success {whatif['success_probability']:.1f}%, "
+                    f"avg revenue {whatif['avg_revenue']:,.0f}, "
+                    f"breakeven month {whatif['avg_time_to_breakeven']:.1f}. "
+                    "In ONE sentence, state the practical takeaway of this comparison."
+                ),
+            }],
+            temperature=0.4,
+            max_tokens=150,
+        )
+        if verdict_resp.text.strip():
+            verdict = verdict_resp.text.strip()
+    except Exception as exc:
+        logger.warning("What-if verdict generation failed for simulation %s: %s", sim_id, exc)
+
+    return {
+        "parsed": {
+            "variable_overrides": overrides,
+            "unparseable_parts": unparseable,
+        },
+        "baseline": baseline,
+        "whatif": whatif,
+        "deltas": deltas,
+        "verdict": verdict,
+    }
+
+
+# ── Bayesian-flavored calibration (fit variables to historical data) ─────────
+
+class CalibrateRequest(BaseModel):
+    # column name -> observed historical series (from /api/upload/parse output).
+    observed: Dict[str, List[float]]
+    # optional: observed column name -> sim variable name. When absent we
+    # fuzzy-match by name (case/whitespace/separator-insensitive).
+    mapping: Optional[Dict[str, str]] = None
+
+
+class CalibrateApplyRequest(BaseModel):
+    # variable_name -> posterior_value to write into the config.
+    posteriors: Dict[str, float]
+
+
+def _validate_observed_series(observed: Dict[str, List[float]]) -> None:
+    """422 unless every observed series is numeric & non-empty."""
+    if not observed:
+        raise HTTPException(
+            status_code=422, detail="observed must contain at least one column."
+        )
+    for col, series in observed.items():
+        if not isinstance(series, list) or len(series) == 0:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Observed series for column '{col}' must be a non-empty list.",
+            )
+        for v in series:
+            # bool is an int subclass but is not a meaningful numeric series value;
+            # NaN/inf pass isinstance(float) but would poison the posterior + score.
+            if (
+                isinstance(v, bool)
+                or not isinstance(v, (int, float))
+                or not math.isfinite(v)
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Observed series for column '{col}' must be finite numeric values.",
+                )
+
+
+@router.post("/{sim_id}/calibrate", dependencies=[Depends(require_expensive_rate_limit)])
+async def calibrate_simulation(
+    sim_id: str,
+    request: CalibrateRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Calibrate engine variables against a user's observed historical data.
+
+    Resolves the column->variable mapping (explicit, else fuzzy name match),
+    validates the observed series (numeric & non-empty -> 422), then runs a
+    LIGHTWEIGHT moment-matching Bayesian update (conjugate-normal posterior of
+    the variable's current value as prior vs. the observed mean/std/n). Adds a
+    one-paragraph plain-English summary (LLM, deterministic template fallback).
+
+    Honest framing: this is NOT MCMC and does NOT invert the simulation's
+    forward map — posteriors are a precision-weighted nudge toward the data.
+    Owner-scoped, expensive. 404 if the sim is missing.
+    """
+    _validate_observed_series(request.observed)
+
+    sim = await get_document(COLLECTION, sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if sim.get("user_id") != user["uid"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    config = SimulationConfig(**sim["config"])
+    config_variables = [
+        {"name": v.name, "label": v.label, "value": v.value}
+        for v in config.variables
+    ]
+
+    calibrated, score, unmatched = run_calibration(
+        config_variables, request.observed, request.mapping
+    )
+
+    method = "moment-matching + conjugate-normal posterior (lightweight Bayesian)"
+
+    # One-paragraph summary (LLM with deterministic template fallback).
+    moved = [c for c in calibrated if abs(c.shift_pct) >= 0.5]
+    if calibrated:
+        biggest = max(calibrated, key=lambda c: abs(c.shift_pct))
+        fallback_summary = (
+            f"Calibrating against your data adjusted {len(calibrated)} variable(s) "
+            f"with a calibration score of {score:.0f}/100. "
+            + (
+                f"The largest shift was {biggest.label}, moving "
+                f"{biggest.shift_pct:+.1f}% from {biggest.prior_value:g} toward the "
+                f"observed mean of {biggest.observed_summary['mean']:g}. "
+                if moved else
+                "No variable moved materially — your priors already matched the data. "
+            )
+            + "This is a lightweight moment-matching Bayesian update, not full MCMC."
+        )
+    else:
+        fallback_summary = (
+            "No observed columns could be matched to simulation variables, so no "
+            "calibration was performed. Provide a mapping or rename columns to match "
+            "variable names."
+        )
+
+    summary = fallback_summary
+    try:
+        summary_resp = await llm_client.chat(
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"A simulation's variables were calibrated against observed "
+                    f"historical data using a lightweight conjugate-normal Bayesian "
+                    f"update (moment matching, NOT MCMC). Calibration score: "
+                    f"{score:.0f}/100. Results: "
+                    f"{json.dumps([c.to_dict() for c in calibrated])}. "
+                    f"Unmatched columns: {unmatched}. "
+                    "In ONE plain-English paragraph, summarize what the data implies "
+                    "about these variables and how confident we should be. Be honest "
+                    "that this is a lightweight fit, not a rigorous MCMC posterior."
+                ),
+            }],
+            temperature=0.4,
+            max_tokens=300,
+        )
+        if summary_resp.text.strip():
+            summary = summary_resp.text.strip()
+    except Exception as exc:
+        logger.warning("Calibration summary generation failed for simulation %s: %s", sim_id, exc)
+
+    return {
+        "calibrated": [c.to_dict() for c in calibrated],
+        "calibration_score": score,
+        "unmatched_columns": unmatched,
+        "method": method,
+        "summary": summary,
+    }
+
+
+@router.post("/{sim_id}/calibrate/apply")
+async def apply_calibration(
+    sim_id: str,
+    request: CalibrateApplyRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Write calibrated posterior values into the simulation's config.
+
+    Validates that every posterior key matches a config variable name (422 on
+    unknown), then updates each matching variable's ``value`` to its posterior
+    and bumps ``updated_at``. Status is left as-is. Owner-scoped. Returns
+    {simulation_id}.
+    """
+    sim = await get_document(COLLECTION, sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if sim.get("user_id") != user["uid"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    config = SimulationConfig(**sim["config"])
+    valid_names = {v.name for v in config.variables}
+    invalid = set(request.posteriors) - valid_names
+    if invalid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown posterior keys: {sorted(invalid)}. "
+                   f"Valid variable names are: {sorted(valid_names)}",
+        )
+
+    # Write posteriors into the config variables, then persist the full config.
+    config_dict = config.model_dump(mode="json")
+    for var in config_dict.get("variables", []):
+        if var.get("name") in request.posteriors:
+            var["value"] = float(request.posteriors[var["name"]])
+
+    await update_document(COLLECTION, sim_id, {
+        "config": config_dict,
+        "updated_at": datetime.utcnow().isoformat(),
+    })
+
+    return {"simulation_id": sim_id}
+
+
+# ── Counterfactual diff (generalized paired-seed comparison) ─────────────────
+
+class DiffRequest(BaseModel):
+    # Direct numeric overrides (NOT a natural-language prompt). Keys are
+    # validated against the config's variable names (422 on unknown key).
+    variable_overrides: Dict[str, float] = Field(default_factory=dict)
+
+
+def _risk_name_severity(results) -> Dict[str, str]:
+    """Map each risk-factor name to its severity from a SimulationResults."""
+    out: Dict[str, str] = {}
+    for rf in results.risk_factors:
+        # rf is a RiskFactor model with .name / .severity attributes.
+        out[rf.name] = rf.severity
+    return out
+
+
+@router.post("/{sim_id}/diff", dependencies=[Depends(require_expensive_rate_limit)])
+async def counterfactual_diff(
+    sim_id: str,
+    request: DiffRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Counterfactual diff: a paired-seed baseline vs. override comparison.
+
+    Generalizes the what-if endpoint but takes DIRECT numeric overrides instead
+    of a natural-language prompt. Baseline and counterfactual runs share the
+    SAME base_seed (reused from the sim's recorded results when present) so the
+    deltas are signal, not Monte Carlo noise. Adds per-month revenue deltas and
+    the set-difference of risk-factor names, plus a one-paragraph LLM
+    explanation (deterministic template fallback). Owner-scoped, expensive.
+    """
+    sim = await get_document(COLLECTION, sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if sim.get("user_id") != user["uid"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    config = SimulationConfig(**sim["config"])
+    overrides = {k: float(v) for k, v in request.variable_overrides.items()}
+    # 422 on any override key that is not a known variable name.
+    _validate_variable_overrides(overrides, config)
+    if not overrides:
+        raise HTTPException(
+            status_code=422,
+            detail="variable_overrides must contain at least one variable.",
+        )
+
+    base_seed = _resolve_base_seed(sim)
+    n = min(config.num_runs, 1000)
+    engine = SimulationEngine(config)
+
+    baseline_res = await engine.run(num_runs=n, base_seed=base_seed)
+    cf_res = await engine.run(
+        num_runs=n, variable_overrides=overrides, base_seed=base_seed
+    )
+
+    baseline = {
+        "success_probability": baseline_res.success_probability,
+        "avg_revenue": baseline_res.avg_revenue,
+        "avg_market_share": baseline_res.avg_market_share,
+        "avg_time_to_breakeven": baseline_res.avg_breakeven_month,
+    }
+    counterfactual = {
+        "success_probability": cf_res.success_probability,
+        "avg_revenue": cf_res.avg_revenue,
+        "avg_market_share": cf_res.avg_market_share,
+        "avg_time_to_breakeven": cf_res.avg_breakeven_month,
+    }
+    deltas = {
+        "success_probability_pp": round(
+            cf_res.success_probability - baseline_res.success_probability, 2
+        ),
+        "avg_revenue": round(cf_res.avg_revenue - baseline_res.avg_revenue, 2),
+        "avg_market_share": round(
+            cf_res.avg_market_share - baseline_res.avg_market_share, 4
+        ),
+        "avg_time_to_breakeven": round(
+            cf_res.avg_breakeven_month - baseline_res.avg_breakeven_month, 2
+        ),
+    }
+
+    # Per-timeline-point revenue delta: zip the two aggregated timelines by month.
+    base_tl = {pt["month"]: pt.get("avg_revenue", 0.0) for pt in baseline_res.timeline_aggregated}
+    cf_tl = {pt["month"]: pt.get("avg_revenue", 0.0) for pt in cf_res.timeline_aggregated}
+    timeline_delta = []
+    for month in sorted(set(base_tl) | set(cf_tl)):
+        b_rev = float(base_tl.get(month, 0.0))
+        c_rev = float(cf_tl.get(month, 0.0))
+        timeline_delta.append({
+            "month": month,
+            "baseline_revenue": round(b_rev, 2),
+            "counterfactual_revenue": round(c_rev, 2),
+            "delta": round(c_rev - b_rev, 2),
+        })
+
+    # Risk-factor set difference by name (appeared = in CF not baseline, etc.).
+    base_risks = _risk_name_severity(baseline_res)
+    cf_risks = _risk_name_severity(cf_res)
+    appeared = [
+        {"name": name, "severity": cf_risks[name]}
+        for name in cf_risks if name not in base_risks
+    ]
+    disappeared = [
+        {"name": name, "severity": base_risks[name]}
+        for name in base_risks if name not in cf_risks
+    ]
+    risk_changes = {"appeared": appeared, "disappeared": disappeared}
+
+    # One-paragraph plain-English attribution (LLM, template fallback).
+    pp = deltas["success_probability_pp"]
+    direction = "raises" if pp > 0 else ("lowers" if pp < 0 else "leaves unchanged")
+    fallback_explanation = (
+        f"Applying {overrides} {direction} the success probability from "
+        f"{baseline['success_probability']:.1f}% to "
+        f"{counterfactual['success_probability']:.1f}% ({pp:+.1f} pp), with average "
+        f"revenue shifting by {deltas['avg_revenue']:+,.0f} and average market share "
+        f"by {deltas['avg_market_share']:+.3f}. "
+        + (
+            f"New risks appeared: {', '.join(r['name'] for r in appeared)}. "
+            if appeared else ""
+        )
+        + (
+            f"Risks dropped out: {', '.join(r['name'] for r in disappeared)}. "
+            if disappeared else ""
+        )
+    ).strip()
+
+    explanation = fallback_explanation
+    try:
+        exp_resp = await llm_client.chat(
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"A Monte Carlo simulation was compared against a counterfactual "
+                    f"with these direct variable overrides: {json.dumps(overrides)}. "
+                    f"Baseline: success {baseline['success_probability']:.1f}%, "
+                    f"avg revenue {baseline['avg_revenue']:,.0f}, "
+                    f"avg market share {baseline['avg_market_share']:.3f}, "
+                    f"breakeven month {baseline['avg_time_to_breakeven']:.1f}. "
+                    f"Counterfactual: success {counterfactual['success_probability']:.1f}%, "
+                    f"avg revenue {counterfactual['avg_revenue']:,.0f}, "
+                    f"avg market share {counterfactual['avg_market_share']:.3f}, "
+                    f"breakeven month {counterfactual['avg_time_to_breakeven']:.1f}. "
+                    f"Risks that newly appeared: {[r['name'] for r in appeared]}. "
+                    f"Risks that dropped out: {[r['name'] for r in disappeared]}. "
+                    "In ONE plain-English paragraph, attribute these changes to the "
+                    "overrides and state the practical takeaway."
+                ),
+            }],
+            temperature=0.4,
+            max_tokens=300,
+        )
+        if exp_resp.text.strip():
+            explanation = exp_resp.text.strip()
+    except Exception as exc:
+        logger.warning("Diff explanation generation failed for simulation %s: %s", sim_id, exc)
+
+    return {
+        "base_seed": base_seed,
+        "baseline": baseline,
+        "counterfactual": counterfactual,
+        "deltas": deltas,
+        "timeline_delta": timeline_delta,
+        "risk_changes": risk_changes,
+        "explanation": explanation,
+    }
+
+
+# ── Per-run explainer (why a percentile path went the way it did) ────────────
+
+_EXPLAIN_PERCENTILES = {"p10": 10, "p50": 50, "p90": 90}
+
+_EXPLAIN_SYSTEM = (
+    "You explain why a single Monte Carlo simulation path ended where it did. "
+    "Given the path's outcome and a short list of its largest-magnitude agent "
+    "events, write a concise narrative (2-4 sentences) attributing the outcome "
+    "to those pivotal events. Use the agent names/types provided; do not invent "
+    'agents or numbers. Respond with JSON of the shape {"narrative": "<text>", '
+    '"pivotal_events": [{"t": <step>, "why": "<one short clause>"}]}, where each '
+    "why explains that event's role. Keep it grounded in the data."
+)
+
+
+def _explain_pivotal_events(replay: dict, top_k: int = 5) -> List[dict]:
+    """Deterministically extract the largest-magnitude agent events from a path.
+
+    Scans every captured tick's events and ranks them by absolute value, then
+    returns the top-K as ``{t, agent_type, action, value, why}`` (``why`` is a
+    template placeholder the LLM may overwrite).
+    """
+    name_by_id = {a["id"]: a.get("name") or a.get("type") for a in replay.get("agents", [])}
+    candidates = []
+    for tick in replay.get("ticks", []):
+        for ev in tick.get("events", []):
+            candidates.append({
+                "t": tick["t"],
+                "agent_id": ev.get("agent_id"),
+                "agent_type": ev.get("agent_type", "agent"),
+                "action": ev.get("action", "act"),
+                "value": float(ev.get("value", 0.0)),
+            })
+    candidates.sort(key=lambda e: abs(e["value"]), reverse=True)
+    pivotal = []
+    for c in candidates[:top_k]:
+        who = name_by_id.get(c["agent_id"], c["agent_type"])
+        pivotal.append({
+            "t": c["t"],
+            "agent_type": c["agent_type"],
+            "action": c["action"],
+            "value": round(c["value"], 4),
+            "why": f"{who} {c['action']} ({c['value']:g}) at step {c['t']}.",
+        })
+    return pivotal
+
+
+@router.get("/{sim_id}/explain", dependencies=[Depends(require_expensive_rate_limit)])
+async def explain_path(
+    sim_id: str,
+    percentile: str = "p50",
+    user: dict = Depends(get_current_user),
+):
+    """Explain why a percentile path (p10/p50/p90) went the way it did.
+
+    Path 0 (driven by base_seed) is the median-ish path used for p50. For
+    p10/p90 we scan a modest sample of path indices, compute each path's final
+    revenue deterministically from base_seed, then pick the path whose final
+    revenue is nearest the requested percentile of that sample. We replay that
+    path with an EventSink, deterministically extract the largest-magnitude
+    agent events as pivotal events, then make ONE llm_client.chat_json call to
+    narrate "why" (template fallback). Owner-scoped, expensive. 404 if no
+    results.
+    """
+    if percentile not in _EXPLAIN_PERCENTILES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"percentile must be one of {sorted(_EXPLAIN_PERCENTILES)}.",
+        )
+
+    sim = await get_document(COLLECTION, sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if sim.get("user_id") != user["uid"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    results = sim.get("results")
+    if not isinstance(results, dict):
+        raise HTTPException(status_code=404, detail="Simulation has no results yet")
+
+    config = SimulationConfig(**sim["config"])
+    base_seed = _resolve_base_seed(sim)
+    engine = SimulationEngine(config)
+
+    target_pct = _EXPLAIN_PERCENTILES[percentile]
+
+    if percentile == "p50":
+        # Path 0 is the canonical median-ish path captured by base_seed.
+        chosen_index = 0
+    else:
+        # Scan a modest sample of single paths, computing each one's final
+        # revenue deterministically (same RNG as the Monte Carlo loop), then
+        # pick the path nearest the requested percentile of that sample.
+        sample_size = min(50, max(10, config.num_runs))
+        finals = []
+        for idx in range(sample_size):
+            single = engine._run_single(None, random.Random(base_seed + idx))
+            finals.append((idx, float(single.get("final_revenue", 0.0))))
+        revenues = sorted(v for _, v in finals)
+        pct_value = float(np.percentile(revenues, target_pct))
+        chosen_index = min(finals, key=lambda iv: abs(iv[1] - pct_value))[0]
+
+    replay = engine.replay_path(base_seed, path_index=chosen_index)
+    seed_used = base_seed + chosen_index
+    # Re-derive the outcome deterministically from the same path. Report the
+    # engine's own final_revenue (the SAME metric the percentile path was
+    # selected by) rather than the replay's last-tick revenue — those differ
+    # for the trend (always) and biology (when sim_steps isn't a clean multiple
+    # of the period) domains, where the tick metric is a different quantity.
+    single_for_outcome = engine._run_single(None, random.Random(seed_used))
+    outcome = {
+        "success": bool(single_for_outcome.get("success", False)),
+        "final_revenue": round(float(single_for_outcome.get("final_revenue", 0.0)), 2),
+    }
+
+    pivotal_events = _explain_pivotal_events(replay)
+
+    fallback_narrative = (
+        f"The {percentile} path ended {'successfully' if outcome['success'] else 'short of target'} "
+        f"with final revenue {outcome['final_revenue']:,.0f}. "
+        + (
+            "Key moves: " + "; ".join(
+                f"{e['agent_type']} {e['action']} ({e['value']:g}) at step {e['t']}"
+                for e in pivotal_events[:3]
+            ) + "."
+            if pivotal_events else
+            "No standout agent actions were captured on this path."
+        )
+    )
+
+    narrative = fallback_narrative
+    try:
+        parsed = await llm_client.chat_json(
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Simulation: {sim.get('name', 'Simulation')} "
+                    f"(category {sim.get('category')}). "
+                    f"This is the {percentile} path. Outcome: "
+                    f"{'success' if outcome['success'] else 'failure'}, final revenue "
+                    f"{outcome['final_revenue']:,.0f}.\n"
+                    f"Largest-magnitude agent events:\n{json.dumps(pivotal_events)}"
+                ),
+            }],
+            system=_EXPLAIN_SYSTEM,
+            temperature=0.4,
+            max_tokens=600,
+        )
+        narr = parsed.get("narrative")
+        if isinstance(narr, str) and narr.strip():
+            narrative = narr.strip()
+        # Let the LLM enrich each pivotal event's "why" by index, when provided.
+        llm_pivotal = parsed.get("pivotal_events")
+        if isinstance(llm_pivotal, list):
+            for i, item in enumerate(llm_pivotal):
+                if i < len(pivotal_events) and isinstance(item, dict) and item.get("why"):
+                    pivotal_events[i]["why"] = str(item["why"])
+    except Exception as exc:
+        logger.warning("Path explanation generation failed for simulation %s: %s", sim_id, exc)
+
+    return {
+        "percentile": percentile,
+        "seed_used": seed_used,
+        "outcome": outcome,
+        "pivotal_events": pivotal_events,
+        "narrative": narrative,
+    }
+
+
+# ── Run history ──────────────────────────────────────────────────────────────
+
+@router.get("/{sim_id}/runs")
+async def list_simulation_runs(sim_id: str, user: dict = Depends(get_current_user)):
+    """Run history for a simulation — newest first, capped at 50."""
+    sim = await get_document(COLLECTION, sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if sim.get("user_id") != user["uid"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    runs = await query_collection(RUNS_COLLECTION, [("simulation_id", "==", sim_id)])
+    runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    return {
+        "runs": [
+            {
+                "run_id": r.get("id"),
+                "created_at": r.get("created_at"),
+                "num_runs": r.get("num_runs"),
+                "success_probability": r.get("success_probability"),
+                "avg_revenue": r.get("avg_revenue"),
+                "variable_overrides": r.get("variable_overrides"),
+            }
+            for r in runs[:50]
+        ]
+    }
 
 
 # ── Simulation comparison ────────────────────────────────────────────────────

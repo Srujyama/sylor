@@ -1,6 +1,26 @@
 """
 Multi-Agent Simulation Engine
 Runs Monte Carlo simulations with AI-driven agent behavior.
+
+Determinism
+-----------
+``SimulationEngine.run`` accepts an optional ``base_seed``. When omitted, one
+is generated and RECORDED on the results (``base_seed``). Path *i* is driven by
+a dedicated ``random.Random(base_seed + i)`` instance that is threaded through
+``_run_single``, every agent's ``react``/``__init__`` and the domain
+``_run_*`` branches, so re-running with the same ``base_seed`` reproduces the
+exact same ``success_probability``. NumPy aggregation (bootstrap CI) uses a
+``numpy.random.Generator`` seeded from the same ``base_seed``.
+
+Persona-driven behavior
+-----------------------
+LLM-generated ``AgentProfile`` fields are no longer dead data: each agent reads
+``activity_level``, ``influence_weight``, ``risk_tolerance`` and
+``sentiment_bias`` (plus the existing ``sensitivity``) and genuinely modulates
+its behavior. The defaults (activity/influence/risk = 0.5, sentiment = 0.0) are
+NEUTRAL — every modulation collapses to a 1.0 multiplier / unchanged threshold,
+so configs that only set ``sensitivity`` behave exactly as before. See each
+agent's ``react`` docstring for the precise mapping.
 """
 import asyncio
 import random
@@ -10,14 +30,130 @@ from typing import List, Dict, Any, Optional
 from app.models.simulation import SimulationConfig, SimulationResults, RiskFactor, TimelinePoint, DomainMetadata
 
 
-class Agent:
-    """Base agent class with configurable behavior."""
+class EventSink:
+    """Collector for a single deterministic simulation path.
 
-    def __init__(self, agent_type: str, count: int, sensitivity: float = 0.7):
+    A simple append-only buffer threaded through ``_run_single`` and the domain
+    ``_run_*`` branches. When (and only when) an ``EventSink`` is attached to a
+    single designated path it records, per time step, every agent's action plus
+    the step's headline metrics. The 1000-path Monte Carlo run does NOT attach a
+    sink, so mass runs are completely unaffected.
+
+    ``ticks`` is a list of ``{t, events: [...], metrics: {...}}`` dicts and
+    ``agents`` is the de-duplicated roster of agents that acted on the path.
+    """
+
+    def __init__(self):
+        self.ticks: List[Dict[str, Any]] = []
+        self._agents: Dict[str, Dict[str, str]] = {}
+        self._current_events: List[Dict[str, Any]] = []
+
+    def start_tick(self) -> None:
+        self._current_events = []
+
+    def record(
+        self, agent_id: str, agent_type: str, action: str,
+        value: float, name: Optional[str] = None, note: Optional[str] = None,
+    ) -> None:
+        if agent_id not in self._agents:
+            self._agents[agent_id] = {
+                "id": agent_id,
+                "type": agent_type,
+                "name": name or agent_id,
+            }
+        event = {
+            "agent_id": agent_id,
+            "agent_type": agent_type,
+            "action": action,
+            "value": round(float(value), 4),
+        }
+        if note:
+            event["note"] = note
+        self._current_events.append(event)
+
+    def end_tick(self, t: int, revenue: float, customers: float, market_share: float) -> None:
+        self.ticks.append({
+            "t": t,
+            "events": list(self._current_events),
+            "metrics": {
+                "revenue": round(float(revenue), 2),
+                "customers": round(float(customers), 2),
+                "market_share": round(float(market_share), 4),
+            },
+        })
+        self._current_events = []
+
+    def agents(self) -> List[Dict[str, str]]:
+        return list(self._agents.values())
+
+
+class Agent:
+    """Base agent class with configurable, persona-driven behavior.
+
+    Persona parameters (all optional, neutral defaults):
+      - sensitivity:      scales reaction magnitude (already plumbed)
+      - activity_level:   0..1, scales action frequency/magnitude
+                          (multiplier ``0.5 + activity_level`` -> 1.0 at 0.5)
+      - influence_weight: 0..1, scales this agent's effect on market_state
+                          (multiplier ``0.5 + influence_weight`` -> 1.0 at 0.5)
+      - risk_tolerance:   0..1, shifts decision thresholds
+                          (aggressive vs conservative)
+      - sentiment_bias:   -1..1, shifts drift / directional bias (0.0 = none)
+    """
+
+    def __init__(
+        self,
+        agent_type: str,
+        count: int,
+        sensitivity: float = 0.7,
+        *,
+        rng: Optional[random.Random] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ):
         self.type = agent_type
         self.count = count
         self.sensitivity = sensitivity
+        # Default to the module-level ``random`` so directly-constructed agents
+        # (e.g. in unit tests that call ``random.seed(42)``) keep working.
+        self.rng = rng if rng is not None else random
+        params = params or {}
+        # Stable identity for event-sink replay/transcript. Falls back to the
+        # agent type when no config id/name is supplied (direct unit-test use).
+        self.agent_id = str(params.get("agent_id") or agent_type)
+        self.display_name = str(params.get("agent_name") or agent_type)
+        self.activity_level = float(params.get("activity_level", 0.5))
+        self.influence_weight = float(params.get("influence_weight", 0.5))
+        self.risk_tolerance = float(params.get("risk_tolerance", 0.5))
+        self.sentiment_bias = float(params.get("sentiment_bias", 0.0))
+        self.decision_style = params.get("decision_style", "balanced")
+        # ``decision_style`` is a categorical persona summary; rather than leave
+        # it inert, fold it into the numeric modulators that every react()
+        # already reads, so an "aggressive" vs "conservative" persona produces
+        # genuinely different behavior. Nudges are clamped to [0, 1].
+        style_adjust = {
+            "aggressive": {"activity_level": +0.2, "risk_tolerance": +0.2},
+            "conservative": {"activity_level": -0.2, "risk_tolerance": -0.2},
+            "reactive": {"activity_level": +0.15, "risk_tolerance": -0.1},
+            "balanced": {},
+        }.get(str(self.decision_style).lower(), {})
+        if style_adjust:
+            self.activity_level = min(1.0, max(0.0, self.activity_level + style_adjust.get("activity_level", 0.0)))
+            self.risk_tolerance = min(1.0, max(0.0, self.risk_tolerance + style_adjust.get("risk_tolerance", 0.0)))
+        # ``behavior_rules`` is descriptive text used by the LLM persona/report
+        # layers; the numeric engine carries but does not interpret it.
+        self.behavior_rules = params.get("behavior_rules", [])
         self.state: Dict[str, Any] = {}
+
+    # ── Persona modulation helpers (neutral at the default values) ────────
+    @property
+    def _activity_mult(self) -> float:
+        """1.0 at activity_level=0.5; 0.5..1.5 across the range."""
+        return 0.5 + self.activity_level
+
+    @property
+    def _influence_mult(self) -> float:
+        """1.0 at influence_weight=0.5; 0.5..1.5 across the range."""
+        return 0.5 + self.influence_weight
 
     def react(self, market_state: Dict[str, Any], variables: Dict[str, float]) -> Dict[str, Any]:
         """Return agent reactions to current market state."""
@@ -25,22 +161,36 @@ class Agent:
 
 
 class CustomerAgent(Agent):
-    def __init__(self, count: int, sensitivity: float, price: float, market_size: float):
-        super().__init__("customer", count, sensitivity)
+    def __init__(
+        self, count: int, sensitivity: float, price: float, market_size: float,
+        *, rng: Optional[random.Random] = None, params: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__("customer", count, sensitivity, rng=rng, params=params)
         self.base_price = price
         self.market_size = market_size
         self.state = {"acquired": 0, "churned": 0}
 
     def react(self, market_state: Dict, variables: Dict) -> Dict:
+        """Persona mapping:
+          - sensitivity   -> price elasticity (existing price_factor)
+          - sentiment_bias -> shifts conversion (positive sentiment buys more)
+          - activity_level -> scales acquisition volume (_activity_mult)
+          - risk_tolerance -> shifts churn sensitivity (risk-averse churn more)
+        """
         price = variables.get("price_per_unit", self.base_price)
         price_factor = max(0.1, 1 - (price - self.base_price) / self.base_price * self.sensitivity)
         conversion = variables.get("conversion_rate", 5) / 100 * price_factor
+        # Positive sentiment lifts conversion; negative depresses it (neutral at 0).
+        conversion *= (1 + self.sentiment_bias * 0.5)
 
         # Add noise
-        noise = random.gauss(1.0, 0.2)
-        new_customers = int(self.market_size * conversion * noise * 0.01)
+        noise = self.rng.gauss(1.0, 0.2)
+        # Activity scales how aggressively this segment is acquired.
+        new_customers = int(self.market_size * conversion * noise * 0.01 * self._activity_mult)
         churn_rate = variables.get("churn_rate", 5) / 100
-        churned = int(self.state["acquired"] * churn_rate * random.gauss(1.0, 0.15))
+        # Risk-averse customers (low risk_tolerance) churn more readily.
+        churn_rate *= (1 + (0.5 - self.risk_tolerance) * 0.4)
+        churned = int(self.state["acquired"] * churn_rate * self.rng.gauss(1.0, 0.15))
 
         self.state["acquired"] = max(0, self.state["acquired"] + new_customers - churned)
         self.state["churned"] = churned
@@ -53,21 +203,28 @@ class CustomerAgent(Agent):
 
 
 class CompetitorAgent(Agent):
-    def __init__(self, count: int, sensitivity: float):
-        super().__init__("competitor", count, sensitivity)
-        self.state = {"strength": 70 + random.uniform(-20, 20), "reaction_delay": random.randint(2, 6)}
+    def __init__(self, count: int, sensitivity: float,
+                 *, rng: Optional[random.Random] = None, params: Optional[Dict[str, Any]] = None):
+        super().__init__("competitor", count, sensitivity, rng=rng, params=params)
+        self.state = {"strength": 70 + self.rng.uniform(-20, 20), "reaction_delay": self.rng.randint(2, 6)}
 
     def react(self, market_state: Dict, variables: Dict) -> Dict:
+        """Persona mapping:
+          - risk_tolerance -> reaction threshold (low risk => reacts sooner)
+          - sensitivity    -> strength_boost magnitude (existing)
+          - activity_level -> scales strength_boost (_activity_mult)
+        """
         your_growth = market_state.get("month_growth", 0)
         # Competitors react with delay
         if market_state.get("month", 1) < self.state["reaction_delay"]:
             return {"strength_change": 0, "action": "observing"}
 
-        # React to your success by increasing strength
-        if your_growth > 0.1:
-            strength_boost = random.uniform(0, 5 * self.sensitivity)
+        # Aggressive (low risk tolerance) competitors react to smaller growth.
+        react_threshold = 0.1 * (2 * self.risk_tolerance)  # 0.1 at neutral 0.5
+        if your_growth > react_threshold:
+            strength_boost = self.rng.uniform(0, 5 * self.sensitivity) * self._activity_mult
             self.state["strength"] = min(100, self.state["strength"] + strength_boost)
-            action = random.choice(["price_cut", "feature_launch", "marketing_surge"])
+            action = self.rng.choice(["price_cut", "feature_launch", "marketing_surge"])
         else:
             self.state["strength"] = max(0, self.state["strength"] - 1)
             action = "maintain"
@@ -76,11 +233,17 @@ class CompetitorAgent(Agent):
 
 
 class InvestorAgent(Agent):
-    def __init__(self, count: int, sensitivity: float):
-        super().__init__("investor", count, sensitivity)
+    def __init__(self, count: int, sensitivity: float,
+                 *, rng: Optional[random.Random] = None, params: Optional[Dict[str, Any]] = None):
+        super().__init__("investor", count, sensitivity, rng=rng, params=params)
         self.state = {"invested": False, "interest": 0}
 
     def react(self, market_state: Dict, variables: Dict) -> Dict:
+        """Persona mapping:
+          - risk_tolerance -> funding interest threshold (risk-takers fund earlier)
+          - activity_level -> probability of a funding event (_activity_mult)
+          - influence_weight -> size of the funding injection (_influence_mult)
+        """
         growth = market_state.get("revenue_growth", 0)
         customers = market_state.get("total_customers", 0)
 
@@ -90,67 +253,92 @@ class InvestorAgent(Agent):
         elif growth > 0.05:
             self.state["interest"] = min(100, self.state["interest"] + 5)
 
+        # Risk-takers fund at a lower interest bar (75 at neutral).
+        interest_threshold = 75 * (1.5 - self.risk_tolerance)
+        funding_prob = 0.3 * self._activity_mult  # 0.3 at neutral
         # Funding event
-        if self.state["interest"] > 75 and not self.state["invested"] and random.random() < 0.3:
+        if self.state["interest"] > interest_threshold and not self.state["invested"] and self.rng.random() < funding_prob:
             self.state["invested"] = True
-            budget_boost = variables.get("budget", 50000) * random.uniform(2, 5)
+            budget_boost = variables.get("budget", 50000) * self.rng.uniform(2, 5) * self._influence_mult
             return {"funding": budget_boost, "interest": self.state["interest"]}
 
         return {"funding": 0, "interest": self.state["interest"]}
 
 
 class MarketForceAgent(Agent):
-    def __init__(self, sensitivity: float):
-        super().__init__("market", 1, sensitivity)
-        self.state = {"trend": random.gauss(0.02, 0.05), "recession": False}
+    def __init__(self, sensitivity: float,
+                 *, rng: Optional[random.Random] = None, params: Optional[Dict[str, Any]] = None):
+        super().__init__("market", 1, sensitivity, rng=rng, params=params)
+        self.state = {"trend": self.rng.gauss(0.02, 0.05), "recession": False}
 
     def react(self, market_state: Dict, variables: Dict) -> Dict:
+        """Persona mapping:
+          - sentiment_bias   -> shifts macro drift (optimistic vs pessimistic)
+          - influence_weight -> scales the trend's effect on the market (_influence_mult)
+        """
         # Macro events
-        if random.random() < 0.02:  # 2% chance of recession event per month
+        if self.rng.random() < 0.02:  # 2% chance of recession event per month
             self.state["recession"] = True
             self.state["trend"] = -0.05
-        elif self.state["recession"] and random.random() < 0.15:
+        elif self.state["recession"] and self.rng.random() < 0.15:
             self.state["recession"] = False
-            self.state["trend"] = random.gauss(0.02, 0.03)
+            self.state["trend"] = self.rng.gauss(0.02, 0.03)
 
-        multiplier = 1 + self.state["trend"]
+        # Influence scales how strongly the trend moves the market; sentiment
+        # adds a directional drift. Neutral -> ``1 + trend`` (legacy behavior).
+        effective_trend = self.state["trend"] * self._influence_mult + self.sentiment_bias * 0.05
+        multiplier = 1 + effective_trend
         return {"trend_multiplier": multiplier, "recession": self.state["recession"]}
 
 
 class TraderAgent(Agent):
     """Simulates trader behavior with momentum/mean-reversion strategies."""
 
-    def __init__(self, count: int, sensitivity: float):
-        super().__init__("trader", count, sensitivity)
+    def __init__(self, count: int, sensitivity: float,
+                 *, rng: Optional[random.Random] = None, params: Optional[Dict[str, Any]] = None):
+        super().__init__("trader", count, sensitivity, rng=rng, params=params)
         self.state = {
             "position": 0,
             "pnl": 0,
-            "strategy": random.choice(["momentum", "mean_reversion"]),
+            "strategy": self.rng.choice(["momentum", "mean_reversion"]),
         }
 
+    def _position_size(self) -> int:
+        """Risk-takers (high risk_tolerance) trade larger size; activity scales draw count is preserved."""
+        base = self.rng.randint(1, 10)
+        return max(1, int(base * (0.5 + self.risk_tolerance)))  # 1.0x at neutral
+
     def react(self, market_state: Dict, variables: Dict) -> Dict:
+        """Persona mapping:
+          - sensitivity    -> signal threshold (existing)
+          - risk_tolerance -> position sizing (aggressive vs conservative)
+          - activity_level -> trade-trigger sensitivity (more active => trades more)
+        """
         price = market_state.get("price", 100)
         prev_price = market_state.get("prev_price", price)
         volatility = variables.get("volatility", 20) / 100
 
+        # More active traders pull the trigger on smaller signals (neutral=1.0).
+        trigger = 0.01 * self.sensitivity / self._activity_mult
+
         if self.state["strategy"] == "momentum":
             signal = (price - prev_price) / max(prev_price, 0.01)
-            if signal > 0.01 * self.sensitivity:
+            if signal > trigger:
                 action = "buy"
-                self.state["position"] += random.randint(1, 10)
-            elif signal < -0.01 * self.sensitivity:
+                self.state["position"] += self._position_size()
+            elif signal < -trigger:
                 action = "sell"
-                self.state["position"] = max(0, self.state["position"] - random.randint(1, 10))
+                self.state["position"] = max(0, self.state["position"] - self._position_size())
             else:
                 action = "hold"
         else:  # mean reversion
             ma = market_state.get("moving_avg", price)
             if price < ma * (1 - 0.02 * self.sensitivity):
                 action = "buy"
-                self.state["position"] += random.randint(1, 10)
+                self.state["position"] += self._position_size()
             elif price > ma * (1 + 0.02 * self.sensitivity):
                 action = "sell"
-                self.state["position"] = max(0, self.state["position"] - random.randint(1, 10))
+                self.state["position"] = max(0, self.state["position"] - self._position_size())
             else:
                 action = "hold"
 
@@ -161,18 +349,23 @@ class TraderAgent(Agent):
 class MarketMakerAgent(Agent):
     """Liquidity provider that adjusts bid/ask spreads."""
 
-    def __init__(self, count: int, sensitivity: float):
-        super().__init__("market_maker", count, sensitivity)
+    def __init__(self, count: int, sensitivity: float,
+                 *, rng: Optional[random.Random] = None, params: Optional[Dict[str, Any]] = None):
+        super().__init__("market_maker", count, sensitivity, rng=rng, params=params)
         self.state = {"spread": 0.5, "inventory": 0}
 
     def react(self, market_state: Dict, variables: Dict) -> Dict:
+        """Persona mapping:
+          - sensitivity      -> spread widening with volatility (existing)
+          - influence_weight -> magnitude of order-flow impact on inventory (_influence_mult)
+        """
         volatility = variables.get("volatility", 20) / 100
         volume = market_state.get("volume", 1000)
 
         # Widen spread in high volatility
         self.state["spread"] = max(0.1, 0.5 + volatility * 2 * self.sensitivity)
         # Adjust inventory based on order flow
-        flow_imbalance = random.gauss(0, volume * 0.01)
+        flow_imbalance = self.rng.gauss(0, volume * 0.01) * self._influence_mult
         self.state["inventory"] += flow_imbalance
 
         return {"spread": self.state["spread"], "inventory": self.state["inventory"]}
@@ -181,11 +374,16 @@ class MarketMakerAgent(Agent):
 class MoleculeAgent(Agent):
     """Simulates molecular binding and conformational changes."""
 
-    def __init__(self, count: int, sensitivity: float):
-        super().__init__("molecule", count, sensitivity)
-        self.state = {"bound": False, "energy": random.gauss(-5, 2), "conformation": 0}
+    def __init__(self, count: int, sensitivity: float,
+                 *, rng: Optional[random.Random] = None, params: Optional[Dict[str, Any]] = None):
+        super().__init__("molecule", count, sensitivity, rng=rng, params=params)
+        self.state = {"bound": False, "energy": self.rng.gauss(-5, 2), "conformation": 0}
 
     def react(self, market_state: Dict, variables: Dict) -> Dict:
+        """Persona mapping:
+          - sensitivity    -> binding probability scaling (existing)
+          - sentiment_bias -> shifts binding propensity (favorable vs hostile env)
+        """
         temperature = variables.get("temperature", 310)
         kd = variables.get("binding_affinity", 10)
         concentration = variables.get("concentration", 100)
@@ -194,20 +392,22 @@ class MoleculeAgent(Agent):
         # Boltzmann binding probability
         kT = 0.00198 * temperature  # kcal/mol
         binding_prob = concentration / (concentration + kd) * self.sensitivity
+        # Sentiment models a favorable/unfavorable microenvironment (neutral=1.0).
+        binding_prob *= (1 + self.sentiment_bias * 0.2)
         # pH effect
         if abs(ph - 7.4) > 1:
             binding_prob *= max(0.3, 1 - abs(ph - 7.4) * 0.2)
 
-        noise = random.gauss(0, 0.1)
-        if not self.state["bound"] and random.random() < binding_prob + noise:
+        noise = self.rng.gauss(0, 0.1)
+        if not self.state["bound"] and self.rng.random() < binding_prob + noise:
             self.state["bound"] = True
-            self.state["energy"] -= random.uniform(1, 5)
-        elif self.state["bound"] and random.random() < 0.05 / self.sensitivity:
+            self.state["energy"] -= self.rng.uniform(1, 5)
+        elif self.state["bound"] and self.rng.random() < 0.05 / self.sensitivity:
             self.state["bound"] = False
-            self.state["energy"] += random.uniform(1, 3)
+            self.state["energy"] += self.rng.uniform(1, 3)
 
         # Conformational changes
-        self.state["conformation"] += random.gauss(0, kT * 0.5)
+        self.state["conformation"] += self.rng.gauss(0, kT * 0.5)
 
         return {
             "bound": self.state["bound"],
@@ -219,11 +419,16 @@ class MoleculeAgent(Agent):
 class EnzymeAgent(Agent):
     """Catalytic agent affecting reaction rates."""
 
-    def __init__(self, count: int, sensitivity: float):
-        super().__init__("enzyme", count, sensitivity)
-        self.state = {"active": True, "catalytic_rate": random.uniform(50, 200), "substrate_processed": 0}
+    def __init__(self, count: int, sensitivity: float,
+                 *, rng: Optional[random.Random] = None, params: Optional[Dict[str, Any]] = None):
+        super().__init__("enzyme", count, sensitivity, rng=rng, params=params)
+        self.state = {"active": True, "catalytic_rate": self.rng.uniform(50, 200), "substrate_processed": 0}
 
     def react(self, market_state: Dict, variables: Dict) -> Dict:
+        """Persona mapping:
+          - sensitivity    -> effective catalytic rate (existing)
+          - activity_level -> turnover throughput (_activity_mult)
+        """
         temperature = variables.get("temperature", 310)
         ph = variables.get("ph_level", 7.4)
 
@@ -231,13 +436,13 @@ class EnzymeAgent(Agent):
         temp_factor = max(0, 1 - abs(temperature - 310) / 100) if temperature < 350 else 0
         ph_factor = max(0, 1 - abs(ph - 7.4) / 3)
 
-        effective_rate = self.state["catalytic_rate"] * temp_factor * ph_factor * self.sensitivity
-        substrate = int(effective_rate * random.gauss(1, 0.2))
+        effective_rate = self.state["catalytic_rate"] * temp_factor * ph_factor * self.sensitivity * self._activity_mult
+        substrate = int(effective_rate * self.rng.gauss(1, 0.2))
         self.state["substrate_processed"] += max(0, substrate)
 
         # Denaturation at extreme conditions
         if temperature > 340 or ph < 4 or ph > 10:
-            if random.random() < 0.1:
+            if self.rng.random() < 0.1:
                 self.state["active"] = False
                 effective_rate = 0
 
@@ -251,24 +456,30 @@ class EnzymeAgent(Agent):
 class DataStreamAgent(Agent):
     """Time-series data feed for trend detection and signal generation."""
 
-    def __init__(self, count: int, sensitivity: float):
-        super().__init__("data_stream", count, sensitivity)
+    def __init__(self, count: int, sensitivity: float,
+                 *, rng: Optional[random.Random] = None, params: Optional[Dict[str, Any]] = None):
+        super().__init__("data_stream", count, sensitivity, rng=rng, params=params)
         self.state = {
-            "trend": random.gauss(0.001, 0.005),
-            "seasonality_phase": random.uniform(0, 2 * 3.14159),
+            "trend": self.rng.gauss(0.001, 0.005),
+            "seasonality_phase": self.rng.uniform(0, 2 * 3.14159),
             "noise_level": 0.02,
         }
 
     def react(self, market_state: Dict, variables: Dict) -> Dict:
+        """Persona mapping:
+          - sentiment_bias   -> directional bias added to the trend component
+          - influence_weight -> amplitude of the trend signal (_influence_mult)
+        """
         step = market_state.get("step", 1)
         seasonality_period = variables.get("seasonality_period", 12)
         trend_strength = variables.get("trend_strength", 50) / 100
         noise_level = variables.get("noise_level", 15) / 100
 
         # Generate signal: trend + seasonality + noise
-        trend_component = self.state["trend"] * trend_strength * step
+        trend_component = self.state["trend"] * trend_strength * step * self._influence_mult
+        trend_component += self.sentiment_bias * 0.01 * step  # directional drift (neutral=0)
         seasonal_component = math.sin(2 * math.pi * step / max(seasonality_period, 1) + self.state["seasonality_phase"]) * 0.05
-        noise_component = random.gauss(0, noise_level)
+        noise_component = self.rng.gauss(0, noise_level)
 
         signal = trend_component + seasonal_component + noise_component
         # Detect pattern
@@ -285,34 +496,38 @@ class DataStreamAgent(Agent):
 class SupplyChainAgent(Agent):
     """Models supplier reliability, lead times, and inventory costs."""
 
-    def __init__(self, count: int, sensitivity: float):
-        super().__init__("supply_chain", count, sensitivity)
+    def __init__(self, count: int, sensitivity: float,
+                 *, rng: Optional[random.Random] = None, params: Optional[Dict[str, Any]] = None):
+        super().__init__("supply_chain", count, sensitivity, rng=rng, params=params)
         self.state = {
-            "reliability": 0.85 + random.uniform(-0.1, 0.1),
-            "lead_time": random.randint(7, 30),  # days
-            "inventory_cost": random.uniform(0.01, 0.05),  # % of revenue
+            "reliability": 0.85 + self.rng.uniform(-0.1, 0.1),
+            "lead_time": self.rng.randint(7, 30),  # days
+            "inventory_cost": self.rng.uniform(0.01, 0.05),  # % of revenue
             "disrupted": False,
         }
 
     def react(self, market_state: Dict, variables: Dict) -> Dict:
+        """Persona mapping:
+          - sensitivity -> stress response to demand spikes (existing)
+        """
         demand_growth = market_state.get("month_growth", 0)
         month = market_state.get("month", 1)
 
         # Demand spikes stress the supply chain
         if demand_growth > 0.15:
-            self.state["lead_time"] = min(60, self.state["lead_time"] + random.randint(1, 5))
+            self.state["lead_time"] = min(60, self.state["lead_time"] + self.rng.randint(1, 5))
             self.state["reliability"] = max(0.5, self.state["reliability"] - 0.03 * self.sensitivity)
             self.state["inventory_cost"] *= 1 + 0.1 * self.sensitivity
         else:
-            self.state["lead_time"] = max(3, self.state["lead_time"] - random.randint(0, 2))
+            self.state["lead_time"] = max(3, self.state["lead_time"] - self.rng.randint(0, 2))
             self.state["reliability"] = min(0.99, self.state["reliability"] + 0.01)
 
         # Random disruption events (3% per month)
-        if random.random() < 0.03:
+        if self.rng.random() < 0.03:
             self.state["disrupted"] = True
             self.state["reliability"] *= 0.6
             self.state["lead_time"] *= 2
-        elif self.state["disrupted"] and random.random() < 0.3:
+        elif self.state["disrupted"] and self.rng.random() < 0.3:
             self.state["disrupted"] = False
 
         cost_impact = self.state["inventory_cost"] * (1 + (1 - self.state["reliability"]))
@@ -327,17 +542,21 @@ class SupplyChainAgent(Agent):
 class EmployeeAgent(Agent):
     """Models hiring, productivity ramp-up, and attrition."""
 
-    def __init__(self, count: int, sensitivity: float):
-        super().__init__("employee", count, sensitivity)
+    def __init__(self, count: int, sensitivity: float,
+                 *, rng: Optional[random.Random] = None, params: Optional[Dict[str, Any]] = None):
+        super().__init__("employee", count, sensitivity, rng=rng, params=params)
         self.state = {
             "headcount": count,
-            "avg_productivity": 0.7 + random.uniform(-0.1, 0.1),  # 0-1
-            "attrition_rate": 0.02 + random.uniform(-0.01, 0.01),  # monthly
+            "avg_productivity": 0.7 + self.rng.uniform(-0.1, 0.1),  # 0-1
+            "attrition_rate": 0.02 + self.rng.uniform(-0.01, 0.01),  # monthly
             "hiring_pipeline": 0,
             "morale": 0.75,
         }
 
     def react(self, market_state: Dict, variables: Dict) -> Dict:
+        """Persona mapping:
+          - sensitivity -> morale impact under headcount pressure (existing)
+        """
         revenue = market_state.get("revenue", 0)
         customers = market_state.get("total_customers", 0)
         month = market_state.get("month", 1)
@@ -358,7 +577,7 @@ class EmployeeAgent(Agent):
             self.state["avg_productivity"] = min(1.0, self.state["avg_productivity"] + 0.02)
 
         # Attrition
-        attrition = int(self.state["headcount"] * self.state["attrition_rate"] * random.gauss(1, 0.3))
+        attrition = int(self.state["headcount"] * self.state["attrition_rate"] * self.rng.gauss(1, 0.3))
         attrition = max(0, min(attrition, self.state["headcount"] - 1))
         self.state["headcount"] -= attrition
 
@@ -391,54 +610,130 @@ class SimulationEngine:
     def _get_variable(self, name: str, default: float) -> float:
         return self.variables.get(name, default)
 
-    def _create_agents(self):
+    def _agent_params(self, agent_cfg) -> Dict[str, Any]:
+        """Extract persona parameters from an AgentConfig (neutral defaults)."""
+        return {
+            "activity_level": getattr(agent_cfg, "activity_level", 0.5),
+            "influence_weight": getattr(agent_cfg, "influence_weight", 0.5),
+            "risk_tolerance": getattr(agent_cfg, "risk_tolerance", 0.5),
+            "sentiment_bias": getattr(agent_cfg, "sentiment_bias", 0.0),
+            "decision_style": getattr(agent_cfg, "decision_style", "balanced"),
+            "behavior_rules": getattr(agent_cfg, "behavior_rules", []) or [],
+            "agent_name": getattr(agent_cfg, "name", None),
+        }
+
+    def _create_agents(self, rng: random.Random):
         agents = []
-        for agent_cfg in self.config.agents:
+        for idx, agent_cfg in enumerate(self.config.agents):
             agent_type = agent_cfg.type.value
+            params = self._agent_params(agent_cfg)
+            # Deterministic, position-based identity for the event sink. Using
+            # the index (not the config's random uuid) keeps replay/transcript
+            # stable across re-parsing of a stored config.
+            params["agent_id"] = f"{agent_type}-{idx}"
             if agent_type == "customer":
                 agents.append(CustomerAgent(
                     agent_cfg.count,
                     agent_cfg.sensitivity,
                     self._get_variable("price_per_unit", 99),
                     self._get_variable("market_size", 1_000_000),
+                    rng=rng, params=params,
                 ))
             elif agent_type == "competitor":
-                agents.append(CompetitorAgent(agent_cfg.count, agent_cfg.sensitivity))
+                agents.append(CompetitorAgent(agent_cfg.count, agent_cfg.sensitivity, rng=rng, params=params))
             elif agent_type == "investor":
-                agents.append(InvestorAgent(agent_cfg.count, agent_cfg.sensitivity))
+                agents.append(InvestorAgent(agent_cfg.count, agent_cfg.sensitivity, rng=rng, params=params))
             elif agent_type == "market":
-                agents.append(MarketForceAgent(agent_cfg.sensitivity))
+                agents.append(MarketForceAgent(agent_cfg.sensitivity, rng=rng, params=params))
             elif agent_type == "trader":
-                agents.append(TraderAgent(agent_cfg.count, agent_cfg.sensitivity))
+                agents.append(TraderAgent(agent_cfg.count, agent_cfg.sensitivity, rng=rng, params=params))
             elif agent_type == "market_maker":
-                agents.append(MarketMakerAgent(agent_cfg.count, agent_cfg.sensitivity))
+                agents.append(MarketMakerAgent(agent_cfg.count, agent_cfg.sensitivity, rng=rng, params=params))
             elif agent_type == "molecule":
-                agents.append(MoleculeAgent(agent_cfg.count, agent_cfg.sensitivity))
+                agents.append(MoleculeAgent(agent_cfg.count, agent_cfg.sensitivity, rng=rng, params=params))
             elif agent_type == "enzyme":
-                agents.append(EnzymeAgent(agent_cfg.count, agent_cfg.sensitivity))
+                agents.append(EnzymeAgent(agent_cfg.count, agent_cfg.sensitivity, rng=rng, params=params))
             elif agent_type == "data_stream":
-                agents.append(DataStreamAgent(agent_cfg.count, agent_cfg.sensitivity))
+                agents.append(DataStreamAgent(agent_cfg.count, agent_cfg.sensitivity, rng=rng, params=params))
             elif agent_type == "supply_chain":
-                agents.append(SupplyChainAgent(agent_cfg.count, agent_cfg.sensitivity))
+                agents.append(SupplyChainAgent(agent_cfg.count, agent_cfg.sensitivity, rng=rng, params=params))
             elif agent_type == "employee":
-                agents.append(EmployeeAgent(agent_cfg.count, agent_cfg.sensitivity))
+                agents.append(EmployeeAgent(agent_cfg.count, agent_cfg.sensitivity, rng=rng, params=params))
         return agents
 
-    def _run_single(self, variables: Optional[Dict] = None) -> Dict[str, Any]:
-        """Run a single simulation scenario."""
+    def _run_single(
+        self,
+        variables: Optional[Dict] = None,
+        rng: Optional[random.Random] = None,
+        event_sink: Optional["EventSink"] = None,
+    ) -> Dict[str, Any]:
+        """Run a single simulation scenario with a dedicated RNG.
+
+        ``rng`` defaults to the module-level ``random`` so direct calls (e.g.
+        in tests using ``random.seed(42)``) remain deterministic.
+
+        ``event_sink`` is optional and, when present, captures per-step agent
+        actions + headline metrics for replay/transcript. It is NEVER passed by
+        the Monte Carlo ``run()`` loop, so mass runs are unaffected.
+        """
+        if rng is None:
+            rng = random
         vars_ = dict(self.variables)
         if variables:
             vars_.update(variables)
 
         category = self.config.category.value
         if category in ("finance",):
-            return self._run_finance(vars_)
+            return self._run_finance(vars_, rng, event_sink)
         elif category in ("biology",):
-            return self._run_biology(vars_)
+            return self._run_biology(vars_, rng, event_sink)
         elif category in ("trend",):
-            return self._run_trend(vars_)
+            return self._run_trend(vars_, rng, event_sink)
         else:
-            return self._run_business(vars_)
+            return self._run_business(vars_, rng, event_sink)
+
+    @staticmethod
+    def _event_for(agent, result: Dict[str, Any]) -> tuple:
+        """Derive a short verb + representative number from a react() result.
+
+        Returns ``(action, value, note)`` for the event sink. Each agent type
+        maps to a domain-meaningful verb so the captured path reads like a
+        sequence of decisions rather than raw numbers.
+        """
+        t = agent.type
+        if t == "customer":
+            new_c = result.get("new_customers", 0)
+            churned = result.get("churned", 0)
+            if new_c > churned:
+                return "acquire", new_c, f"{new_c} new, {churned} churned"
+            return "churn", churned, f"{new_c} new, {churned} churned"
+        if t == "competitor":
+            return result.get("action", "maintain"), result.get("strength", 0), None
+        if t == "investor":
+            funding = result.get("funding", 0)
+            if funding > 0:
+                return "fund", funding, f"interest {result.get('interest', 0):.0f}"
+            return "watch", result.get("interest", 0), None
+        if t == "market":
+            mult = result.get("trend_multiplier", 1.0)
+            if result.get("recession"):
+                return "recession", mult, "macro downturn"
+            return "drift", mult, None
+        if t == "trader":
+            return result.get("action", "hold"), result.get("position", 0), f"pnl {result.get('pnl', 0):.1f}"
+        if t == "market_maker":
+            return "quote", result.get("spread", 0), f"inventory {result.get('inventory', 0):.1f}"
+        if t == "molecule":
+            return ("bind" if result.get("bound") else "release"), result.get("energy", 0), None
+        if t == "enzyme":
+            return ("catalyze" if result.get("active") else "denatured"), result.get("rate", 0), None
+        if t == "data_stream":
+            return ("signal" if result.get("pattern_detected") else "noise"), result.get("signal", 0), None
+        if t == "supply_chain":
+            return ("disrupted" if result.get("disrupted") else "supply"), result.get("cost_impact", 0), f"lead {result.get('lead_time', 0)}d"
+        if t == "employee":
+            return "staff", result.get("headcount", 0), f"morale {result.get('morale', 0):.2f}"
+        return "act", 0, None
 
     def _find_var(self, vars_: Dict, *keys: str, default: float = 0) -> float:
         """Find a variable by trying multiple possible names (AI may name things differently)."""
@@ -451,9 +746,10 @@ class SimulationEngine:
                     return float(vars_[vk])
         return default
 
-    def _run_business(self, vars_: Dict) -> Dict[str, Any]:
+    def _run_business(self, vars_: Dict, rng: random.Random,
+                      event_sink: Optional["EventSink"] = None) -> Dict[str, Any]:
         """Run a business/startup simulation. Works with AI-generated variable names."""
-        agents = self._create_agents()
+        agents = self._create_agents(rng)
 
         # Flexibly find key variables — AI may name them differently
         budget = self._find_var(vars_, "budget", "monthly_budget", "monthly_burn", "burn_rate", "monthly_burn_rate", default=50000)
@@ -483,8 +779,15 @@ class SimulationEngine:
             supply_cost_impact = 0
             productivity_multiplier = 1.0
 
+            if event_sink is not None:
+                event_sink.start_tick()
+
             for agent in agents:
                 result = agent.react(market_state, vars_)
+                if event_sink is not None:
+                    action, value, note = self._event_for(agent, result)
+                    event_sink.record(agent.agent_id, agent.type, action, value,
+                                      name=agent.display_name, note=note)
                 if agent.type == "customer":
                     customers = result["total"]
                 elif agent.type == "market":
@@ -504,10 +807,13 @@ class SimulationEngine:
             budget += new_funding
 
             prev_revenue = revenue
-            revenue = customers * price * market_effect * productivity_multiplier + random.gauss(0, max(customers * price * 0.1, 1))
+            revenue = customers * price * market_effect * productivity_multiplier + rng.gauss(0, max(customers * price * 0.1, 1))
             revenue = max(0, revenue * (1 - supply_cost_impact))
 
             market_share = min(100, (customers / max(market_size, 1)) * 100)
+
+            if event_sink is not None:
+                event_sink.end_tick(month, revenue, customers, market_share)
 
             timeline.append({
                 "month": month,
@@ -538,9 +844,10 @@ class SimulationEngine:
             "timeline": timeline,
         }
 
-    def _run_finance(self, vars_: Dict) -> Dict[str, Any]:
+    def _run_finance(self, vars_: Dict, rng: random.Random,
+                     event_sink: Optional["EventSink"] = None) -> Dict[str, Any]:
         """Run a financial markets simulation."""
-        agents = self._create_agents()
+        agents = self._create_agents(rng)
         portfolio_value = self._find_var(vars_, "portfolio_value", "starting_capital", "initial_capital", "capital", default=100000)
         # Cap trading_days: use time_horizon * ~21 trading days/month, max 252
         default_days = min(252, self.config.time_horizon * 21)
@@ -551,7 +858,7 @@ class SimulationEngine:
         num_assets = int(self._find_var(vars_, "num_assets", "number_of_assets", "asset_count", default=5))
 
         timeline = []
-        prices = [100 + random.gauss(0, 10) for _ in range(num_assets)]
+        prices = [100 + rng.gauss(0, 10) for _ in range(num_assets)]
         moving_avg = list(prices)
 
         for day in range(1, trading_days + 1):
@@ -559,7 +866,7 @@ class SimulationEngine:
             # Update prices with geometric brownian motion
             for i in range(len(prices)):
                 drift = 0.0001  # slight positive drift
-                shock = random.gauss(drift, volatility / math.sqrt(252))
+                shock = rng.gauss(drift, volatility / math.sqrt(252))
                 prices[i] *= (1 + shock)
                 moving_avg[i] = moving_avg[i] * 0.95 + prices[i] * 0.05
 
@@ -568,19 +875,33 @@ class SimulationEngine:
                 "price": sum(prices) / len(prices),
                 "prev_price": sum(prev_prices) / len(prev_prices),
                 "moving_avg": sum(moving_avg) / len(moving_avg),
-                "volume": random.randint(500, 5000),
+                "volume": rng.randint(500, 5000),
             }
 
             total_pnl = 0
             spread = 0.5
+            if event_sink is not None:
+                event_sink.start_tick()
             for agent in agents:
                 result = agent.react(market_state, vars_)
+                if event_sink is not None:
+                    action, value, note = self._event_for(agent, result)
+                    event_sink.record(agent.agent_id, agent.type, action, value,
+                                      name=agent.display_name, note=note)
                 if agent.type == "trader":
                     total_pnl += result.get("pnl", 0)
                 elif agent.type == "market_maker":
                     spread = result.get("spread", 0.5)
 
             portfolio_value = initial_value + total_pnl
+
+            if event_sink is not None:
+                event_sink.end_tick(
+                    day,
+                    portfolio_value - initial_value,
+                    int(sum(prices)),
+                    round((portfolio_value / initial_value - 1) * 100, 4),
+                )
 
             if day % max(1, trading_days // self.config.time_horizon) == 0:
                 month = len(timeline) + 1
@@ -607,9 +928,10 @@ class SimulationEngine:
             "timeline": timeline if timeline else [{"month": 1, "revenue": 0, "customers": 0, "market_share": 0, "competitor_strength": 50, "budget": portfolio_value}],
         }
 
-    def _run_biology(self, vars_: Dict) -> Dict[str, Any]:
+    def _run_biology(self, vars_: Dict, rng: random.Random,
+                     event_sink: Optional["EventSink"] = None) -> Dict[str, Any]:
         """Run a molecular biology simulation."""
-        agents = self._create_agents()
+        agents = self._create_agents(rng)
         num_molecules = int(self._find_var(vars_, "num_molecules", "molecule_count", "number_of_molecules", default=128))
         sim_steps = int(self._find_var(vars_, "sim_steps", "simulation_steps", "total_steps", default=1000))
         sim_steps = min(sim_steps, 2000)  # Hard cap
@@ -625,8 +947,16 @@ class SimulationEngine:
             bound_count = 0
             processed = 0
 
+            capture = event_sink is not None and step % steps_per_period == 0
+            if capture:
+                event_sink.start_tick()
+
             for agent in agents:
                 result = agent.react(market_state, vars_)
+                if capture:
+                    action, value, note = self._event_for(agent, result)
+                    event_sink.record(agent.agent_id, agent.type, action, value,
+                                      name=agent.display_name, note=note)
                 if agent.type == "molecule":
                     if result.get("bound", False):
                         bound_count += 1
@@ -639,6 +969,11 @@ class SimulationEngine:
             if step % steps_per_period == 0:
                 month = len(timeline) + 1
                 binding_rate = bound_count / max(num_molecules, 1)
+                if capture:
+                    event_sink.end_tick(
+                        month, round(binding_rate * 100, 2), total_bound,
+                        round(binding_rate * 100, 4),
+                    )
                 timeline.append({
                     "month": month,
                     "revenue": round(binding_rate * 100, 2),  # reusing for binding %
@@ -661,9 +996,10 @@ class SimulationEngine:
             "timeline": timeline if timeline else [{"month": 1, "revenue": 0, "customers": 0, "market_share": 0, "competitor_strength": 0, "budget": 0}],
         }
 
-    def _run_trend(self, vars_: Dict) -> Dict[str, Any]:
+    def _run_trend(self, vars_: Dict, rng: random.Random,
+                   event_sink: Optional["EventSink"] = None) -> Dict[str, Any]:
         """Run a trend analysis simulation."""
-        agents = self._create_agents()
+        agents = self._create_agents(rng)
         forecast_periods = int(self._find_var(vars_, "forecast_periods", "forecast_horizon", "prediction_periods", default=self.config.time_horizon * 2))
         forecast_periods = min(forecast_periods, 120)  # Hard cap
         confidence_level = self._find_var(vars_, "confidence_level", "confidence_threshold", default=95) / 100
@@ -672,13 +1008,24 @@ class SimulationEngine:
         signals = []
         patterns_detected = 0
 
+        period_size = max(1, forecast_periods // self.config.time_horizon)
         for step in range(1, forecast_periods + 1):
             market_state = {"step": step}
             step_signal = 0
             step_patterns = 0
 
+            capture = event_sink is not None and (
+                step % period_size == 0 or step == forecast_periods
+            )
+            if capture:
+                event_sink.start_tick()
+
             for agent in agents:
                 result = agent.react(market_state, vars_)
+                if capture:
+                    action, value, note = self._event_for(agent, result)
+                    event_sink.record(agent.agent_id, agent.type, action, value,
+                                      name=agent.display_name, note=note)
                 if agent.type == "data_stream":
                     step_signal += result.get("signal", 0)
                     if result.get("pattern_detected", False):
@@ -690,9 +1037,16 @@ class SimulationEngine:
             signals.append(step_signal)
             patterns_detected += step_patterns
 
-            if step % max(1, forecast_periods // self.config.time_horizon) == 0 or step == forecast_periods:
+            if step % period_size == 0 or step == forecast_periods:
                 month = len(timeline) + 1
                 accuracy = min(100, patterns_detected / max(step, 1) * 100 * 0.5 + 50)
+                if capture:
+                    event_sink.end_tick(
+                        month,
+                        round(sum(signals[-10:]) if len(signals) >= 10 else sum(signals), 4),
+                        patterns_detected,
+                        round(accuracy, 4),
+                    )
                 timeline.append({
                     "month": month,
                     "revenue": round(sum(signals[-10:]) if len(signals) >= 10 else sum(signals), 4),
@@ -715,19 +1069,59 @@ class SimulationEngine:
             "timeline": timeline if timeline else [{"month": 1, "revenue": 0, "customers": 0, "market_share": 0, "competitor_strength": 0, "budget": 0}],
         }
 
+    # Domain -> singular time unit for replay (e.g. "month", "day", "step").
+    _TIME_UNIT_SINGULAR = {
+        "finance": "day",
+        "biology": "step",
+        "trend": "period",
+    }
+
+    def replay_path(
+        self,
+        base_seed: int,
+        variable_overrides: Optional[Dict] = None,
+        path_index: int = 0,
+    ) -> Dict[str, Any]:
+        """Re-run ONE deterministic path with an attached event sink.
+
+        Uses ``random.Random(base_seed + path_index)`` — the same RNG the Monte
+        Carlo loop uses for path ``path_index`` — so the captured path matches a
+        real path from the mass run. Returns ``{base_seed, time_unit, agents,
+        ticks}`` ready to serve as the replay payload. This is a single cheap
+        path, NOT the full Monte Carlo.
+        """
+        sink = EventSink()
+        rng = random.Random(base_seed + path_index)
+        self._run_single(variable_overrides, rng, event_sink=sink)
+        category = self.config.category.value
+        time_unit = self._TIME_UNIT_SINGULAR.get(category, "month")
+        return {
+            "base_seed": base_seed,
+            "time_unit": time_unit,
+            "agents": sink.agents(),
+            "ticks": sink.ticks,
+        }
+
     async def run(
         self,
         num_runs: Optional[int] = None,
         variable_overrides: Optional[Dict] = None,
         progress_callback: Optional[Any] = None,
+        base_seed: Optional[int] = None,
     ) -> SimulationResults:
         """Run full Monte Carlo simulation.
 
         Args:
+            base_seed: Optional reproducibility seed. When omitted, one is
+                generated and recorded on the results. Path i is driven by
+                ``random.Random(base_seed + i)`` so the same base_seed yields
+                an identical success_probability.
             progress_callback: Optional async callable(completed: int, total: int)
                 called after each batch completes, for SSE streaming.
         """
         n = num_runs or self.config.num_runs
+        if base_seed is None:
+            base_seed = random.randrange(2 ** 32)
 
         # Run in batches — larger batches reduce asyncio overhead for CPU-bound tasks
         results = []
@@ -735,11 +1129,19 @@ class SimulationEngine:
         for i in range(0, n, batch_size):
             batch = min(batch_size, n - i)
             batch_results = await asyncio.gather(
-                *[asyncio.to_thread(self._run_single, variable_overrides) for _ in range(batch)]
+                *[
+                    asyncio.to_thread(
+                        self._run_single, variable_overrides, random.Random(base_seed + i + j)
+                    )
+                    for j in range(batch)
+                ]
             )
             results.extend(batch_results)
             if progress_callback:
                 await progress_callback(len(results), n)
+
+        # NumPy aggregation RNG seeded from the same base_seed for reproducibility.
+        np_rng = np.random.default_rng(base_seed)
 
         # Aggregate results
         successes = [r for r in results if r["success"]]
@@ -758,10 +1160,13 @@ class SimulationEngine:
         success_flags = [r["success"] for r in results]
         bootstrap_probs = []
         for _ in range(200):
-            sample = np.random.choice(success_flags, size=len(success_flags), replace=True)
+            sample = np_rng.choice(success_flags, size=len(success_flags), replace=True)
             bootstrap_probs.append(np.mean(sample) * 100)
         ci_low = max(0, float(np.percentile(bootstrap_probs, 2.5)))
         ci_high = min(100, float(np.percentile(bootstrap_probs, 97.5)))
+
+        # ── Confidence diagnostics ──────────────────────────────────────
+        diagnostics = self._compute_diagnostics(success_flags, ci_low, ci_high)
 
         # Dynamic outcome distribution based on actual result data (not hardcoded ranges)
         category = self.config.category.value
@@ -852,7 +1257,54 @@ class SimulationEngine:
             success_explanation=self._success_explanation(success_prob, avg_revenue),
             failure_explanation=self._failure_explanation(results),
             domain_metadata=domain_metadata,
+            base_seed=base_seed,
+            monte_carlo_standard_error=diagnostics["mcse"],
+            convergence_delta=diagnostics["convergence_delta"],
+            converged=diagnostics["converged"],
+            forecast_confidence=diagnostics["forecast_confidence"],
         )
+
+    def _compute_diagnostics(
+        self, success_flags: List[bool], ci_low: float, ci_high: float
+    ) -> Dict[str, Any]:
+        """Compute Monte-Carlo confidence diagnostics.
+
+        - monte_carlo_standard_error: sqrt(p(1-p)/n) on the success probability,
+          expressed in percentage points.
+        - convergence: |first-half success prob - second-half| <= 2*MCSE.
+        - forecast_confidence: derived from MCSE and the CI width.
+        """
+        n = len(success_flags)
+        p = (sum(1 for f in success_flags if f) / n) if n else 0.0
+        mcse = math.sqrt(p * (1 - p) / n) * 100 if n else 0.0
+
+        # Convergence: first half vs second half of the paths.
+        half = n // 2
+        if half >= 1:
+            first = success_flags[:half]
+            second = success_flags[half:]
+            p_first = sum(1 for f in first if f) / len(first) * 100
+            p_second = sum(1 for f in second if f) / len(second) * 100
+            convergence_delta = abs(p_first - p_second)
+        else:
+            convergence_delta = 0.0
+        converged = convergence_delta <= max(2 * mcse, 1e-9)
+
+        # Forecast confidence from MCSE + CI width.
+        ci_width = ci_high - ci_low
+        if mcse <= 1.5 and ci_width <= 10:
+            forecast_confidence = "high"
+        elif mcse <= 4.0 and ci_width <= 25:
+            forecast_confidence = "medium"
+        else:
+            forecast_confidence = "low"
+
+        return {
+            "mcse": round(mcse, 3),
+            "convergence_delta": round(convergence_delta, 3),
+            "converged": bool(converged),
+            "forecast_confidence": forecast_confidence,
+        }
 
     def _generate_risk_factors(self, results: List[Dict], success_prob: float) -> List[RiskFactor]:
         category = self.config.category.value
@@ -983,7 +1435,7 @@ class SimulationEngine:
                 f"Median final customer count: {median_customers} at end of simulation period",
                 f"Median monthly revenue: ${median_revenue:,.0f} at simulation end",
                 f"In {pct_above_1m}% of runs, revenue exceeded $1M ARR",
-                f"Break-even timing averaged month {np.mean([r['months_survived'] for r in results if r['success']]):.1f} in successful runs",
+                f"Break-even timing averaged month {np.mean([r['months_survived'] for r in results if r['success']]) if any(r['success'] for r in results) else 0:.1f} in successful runs",
             ]
 
     def _success_explanation(self, prob: float, avg_rev: float) -> str:

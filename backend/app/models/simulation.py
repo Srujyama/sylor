@@ -78,6 +78,16 @@ class AgentConfig(BaseModel):
     sensitivity: float = Field(ge=0, le=1, default=0.7)
     behavior_rules: List[str] = []
 
+    # Persona-driven behavioral parameters (from generated AgentProfiles).
+    # Defaults are NEUTRAL: at these values the engine's persona modulations
+    # collapse to 1.0/no-op, preserving the legacy behavior for configs that
+    # only set `sensitivity`.
+    activity_level: float = Field(ge=0, le=1, default=0.5)
+    influence_weight: float = Field(ge=0, le=1, default=0.5)
+    sentiment_bias: float = Field(ge=-1, le=1, default=0.0)
+    risk_tolerance: float = Field(ge=0, le=1, default=0.5)
+    decision_style: Optional[str] = None
+
     @field_validator("type", mode="before")
     @classmethod
     def coerce_agent_type(cls, v):
@@ -157,6 +167,22 @@ class SimulationResults(BaseModel):
     failure_explanation: str
     domain_metadata: Optional[DomainMetadata] = None
 
+    # ── Reproducibility ──────────────────────────────────────────────
+    # The base seed actually used for this run. Re-running with the same
+    # base_seed (and identical config/overrides) reproduces the result.
+    base_seed: Optional[int] = None
+
+    # ── Confidence diagnostics ───────────────────────────────────────
+    # Monte-Carlo standard error of the success probability (percentage
+    # points): sqrt(p(1-p)/n) * 100, where p is the success fraction.
+    monte_carlo_standard_error: Optional[float] = None
+    # First-half vs second-half success-prob gap and whether the run is
+    # considered converged (|gap| <= 2 * MCSE).
+    convergence_delta: Optional[float] = None
+    converged: Optional[bool] = None
+    # Overall confidence in the forecast: "high" | "medium" | "low".
+    forecast_confidence: Optional[str] = None
+
 
 class SimulationCreate(BaseModel):
     config: SimulationConfig
@@ -175,6 +201,20 @@ class SimulationResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     run_count: int = 0
+
+    # ── Scenario tree (branching simulations) ────────────────────────
+    # A root simulation has parent_id == None and root_id == its own id.
+    # Branches/copies set parent_id to their source and inherit root_id.
+    parent_id: Optional[str] = None
+    root_id: Optional[str] = None
+    branch_label: Optional[str] = None
+
+
+class BranchSimulationRequest(BaseModel):
+    """Branch an existing simulation with variable overrides applied."""
+    variable_overrides: Dict[str, float]
+    label: Optional[str] = None
+    num_runs: Optional[int] = Field(default=None, ge=10, le=10000)
 
 
 class RunSimulationRequest(BaseModel):

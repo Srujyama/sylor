@@ -19,12 +19,16 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const router = useRouter();
 
-  // Once Firebase confirms auth, navigate to dashboard
+  // Once Firebase confirms auth, navigate to the `next` destination
+  // (set by auth guards, e.g. /login?next=/simulations/new) or the dashboard.
   useEffect(() => {
     if (!loading && !googleLoading) return;
     const unsubscribe = onAuthChange((user) => {
       if (user) {
-        router.push("/dashboard");
+        const next = new URLSearchParams(window.location.search).get("next");
+        // Only allow internal paths — never redirect off-site
+        const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+        router.push(safeNext);
       }
     });
     return () => unsubscribe();

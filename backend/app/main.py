@@ -15,7 +15,10 @@ from fastapi.responses import JSONResponse
 import time
 
 from app.config import settings
-from app.routers import simulations, templates, upload, context, projects, graphs, reports, users, export
+from app.routers import (
+    simulations, templates, upload, context, projects, graphs, reports,
+    users, export, shares, analytics, public, demo, insights,
+)
 from app.middleware.rate_limit import RateLimitMiddleware
 
 app = FastAPI(
@@ -46,6 +49,11 @@ app.include_router(upload.router)
 app.include_router(context.router)
 app.include_router(users.router)      # User profile & preferences
 app.include_router(export.router)     # Data export
+app.include_router(shares.router)     # Share links + public frozen snapshots
+app.include_router(analytics.router)  # Per-user analytics summary
+app.include_router(public.router)     # Public anonymized platform stats
+app.include_router(demo.router)       # Zero-signup public demo + claim
+app.include_router(insights.router)   # Narrative dashboard digest
 
 # ── New MiroFish-Inspired Routers ────────────────────────────────────────────
 app.include_router(projects.router)   # Unified project orchestration

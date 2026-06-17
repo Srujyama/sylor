@@ -14,6 +14,7 @@ import json
 import logging
 import uuid
 import re
+import numpy as np
 from typing import Optional, List, Dict, Any, Callable, Awaitable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -727,46 +728,122 @@ Only extract entities that clearly appear in the text. Use the exact type names 
             return None
         return graph.nodes.get(entity_uuid)
 
+    # Number of lexically-ranked candidates fed to the optional LLM re-rank.
+    _SEARCH_CANDIDATE_K = 30
+    _TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+    @classmethod
+    def _tokenize(cls, text: str) -> List[str]:
+        """Lowercase alphanumeric tokenization for the lexical index."""
+        return cls._TOKEN_RE.findall((text or "").lower())
+
+    @classmethod
+    def _lexical_rank(
+        cls, nodes: List[EntityNode], query: str, k: int
+    ) -> List[EntityNode]:
+        """Rank ALL entities against the query with a TF-IDF cosine score.
+
+        Builds a term-frequency vector over each entity's ``name + type +
+        summary`` and the query, applies IDF weighting computed across the whole
+        corpus, and scores via cosine similarity using numpy. This replaces the
+        old ``entity_summaries[:50]`` truncation that silently ignored every
+        entity past index 50. Returns the top-``k`` nodes (score > 0).
+
+        NOTE: this is a lexical (bag-of-words) ranker, NOT semantic embeddings.
+        A true vector-embedding upgrade (e.g. the Voyage API) is a future
+        enhancement; it is intentionally avoided here to add no heavy
+        dependency — numpy (already present) is sufficient.
+        """
+        query_tokens = cls._tokenize(query)
+        if not query_tokens or not nodes:
+            return []
+
+        # Per-document token lists over the full corpus (no truncation).
+        docs = [
+            cls._tokenize(f"{n.name} {n.entity_type} {n.summary}")
+            for n in nodes
+        ]
+
+        # Vocabulary restricted to query terms — only those affect cosine score
+        # against the query, so this keeps the vectors tiny regardless of corpus.
+        vocab = {t: i for i, t in enumerate(set(query_tokens))}
+        n_docs = len(docs)
+        # Document frequency per query term, for IDF weighting.
+        df = np.zeros(len(vocab), dtype=float)
+        for doc in docs:
+            present = {t for t in doc if t in vocab}
+            for t in present:
+                df[vocab[t]] += 1.0
+        # Smoothed IDF: log((N + 1) / (df + 1)) + 1.
+        idf = np.log((n_docs + 1) / (df + 1.0)) + 1.0
+
+        # Build TF-IDF rows for each doc and the query, then cosine-score.
+        doc_matrix = np.zeros((n_docs, len(vocab)), dtype=float)
+        for r, doc in enumerate(docs):
+            for t in doc:
+                idx = vocab.get(t)
+                if idx is not None:
+                    doc_matrix[r, idx] += 1.0
+        doc_matrix *= idf  # apply IDF column-wise
+
+        query_vec = np.zeros(len(vocab), dtype=float)
+        for t in query_tokens:
+            query_vec[vocab[t]] += 1.0
+        query_vec *= idf
+
+        q_norm = float(np.linalg.norm(query_vec))
+        doc_norms = np.linalg.norm(doc_matrix, axis=1)
+        if q_norm == 0.0:
+            return []
+        # Cosine similarity; guard against zero-norm docs.
+        denom = doc_norms * q_norm
+        with np.errstate(divide="ignore", invalid="ignore"):
+            scores = np.where(denom > 0, doc_matrix @ query_vec / denom, 0.0)
+
+        ranked = sorted(
+            ((float(scores[i]), nodes[i]) for i in range(n_docs)),
+            key=lambda sn: sn[0],
+            reverse=True,
+        )
+        out: List[EntityNode] = []
+        for score, node in ranked:
+            if score <= 0:
+                break
+            node.relevance_score = round(score, 6)
+            out.append(node)
+            if len(out) >= k:
+                break
+        return out
+
     async def search_graph(
         self, graph_id: str, query: str, limit: int = 10
     ) -> List[EntityNode]:
         """
-        Semantic search over graph entities.
-        Improved over MiroFish: uses Claude for relevance scoring instead of keyword matching.
+        Lexical (TF-IDF) candidate selection over ALL entities, then an optional
+        LLM re-rank of the top-K candidates.
+
+        Previously this scored only the FIRST 50 entities via the LLM (a
+        truncation bug that hid every entity past index 50). Now we first rank
+        EVERY entity with a numpy TF-IDF cosine score, take the top-K, and only
+        then optionally ask the LLM to re-rank those K. If the LLM step fails we
+        return the lexically-ranked candidates directly. A pure keyword fallback
+        remains for the (rare) case the TF-IDF ranker yields nothing.
         """
         graph = await self.get_graph(graph_id)
         if not graph or not graph.nodes:
             return []
 
-        # Build entity summaries for scoring
-        entity_summaries = []
-        for node in graph.nodes.values():
-            summary = f"{node.name} ({node.entity_type}): {node.summary}"
-            entity_summaries.append({"uuid": node.uuid, "summary": summary})
+        nodes = list(graph.nodes.values())
 
-        # Use LLM to score relevance (improvement over MiroFish's keyword matching)
-        try:
-            result = await self.llm.chat_json(
-                messages=[{"role": "user", "content": f"""Query: "{query}"
+        # Stage 1: lexical TF-IDF ranking over the FULL corpus -> top-K candidates.
+        candidates = self._lexical_rank(nodes, query, self._SEARCH_CANDIDATE_K)
 
-Entities:
-{json.dumps(entity_summaries[:50], indent=1)}
-
-Return the UUIDs of the most relevant entities, ordered by relevance:
-{{"relevant_uuids": ["uuid1", "uuid2", ...]}}"""}],
-                system="Score entity relevance to the query. Return only the most relevant entity UUIDs.",
-                temperature=0.1,
-                max_tokens=500,
-            )
-
-            relevant_uuids = result.get("relevant_uuids", [])[:limit]
-            return [graph.nodes[uid] for uid in relevant_uuids if uid in graph.nodes]
-
-        except Exception:
-            # Fallback: simple keyword matching (MiroFish pattern)
+        if not candidates:
+            # Keyword fallback (MiroFish pattern) when TF-IDF found nothing —
+            # e.g. a query whose terms never appear in any entity text.
             query_lower = query.lower()
             scored = []
-            for node in graph.nodes.values():
+            for node in nodes:
                 score = 0
                 if query_lower in node.name.lower():
                     score += 3
@@ -777,9 +854,36 @@ Return the UUIDs of the most relevant entities, ordered by relevance:
                 if score > 0:
                     node.relevance_score = score
                     scored.append(node)
-
             scored.sort(key=lambda n: n.relevance_score, reverse=True)
             return scored[:limit]
+
+        # Stage 2: optional LLM re-rank of ONLY the K lexical candidates.
+        entity_summaries = [
+            {"uuid": n.uuid, "summary": f"{n.name} ({n.entity_type}): {n.summary}"}
+            for n in candidates
+        ]
+        try:
+            result = await self.llm.chat_json(
+                messages=[{"role": "user", "content": f"""Query: "{query}"
+
+Entities:
+{json.dumps(entity_summaries, indent=1)}
+
+Return the UUIDs of the most relevant entities, ordered by relevance:
+{{"relevant_uuids": ["uuid1", "uuid2", ...]}}"""}],
+                system="Score entity relevance to the query. Return only the most relevant entity UUIDs.",
+                temperature=0.1,
+                max_tokens=500,
+            )
+            relevant_uuids = result.get("relevant_uuids", [])[:limit]
+            reranked = [graph.nodes[uid] for uid in relevant_uuids if uid in graph.nodes]
+            if reranked:
+                return reranked
+            # LLM returned nothing usable — fall back to the lexical order.
+            return candidates[:limit]
+        except Exception as exc:
+            logger.debug("LLM re-rank failed for graph %s, using lexical order: %s", graph_id, exc)
+            return candidates[:limit]
 
     async def get_graph_statistics(self, graph_id: str) -> Dict[str, Any]:
         """Get graph statistics (from MiroFish pattern)."""

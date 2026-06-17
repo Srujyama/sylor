@@ -192,14 +192,12 @@ class TestVariableOverrideEdgeCases:
     @pytest.mark.asyncio
     async def test_override_actually_changes_behavior(self):
         """Overriding budget to a huge value should shift success probability."""
-        random.seed(42)
         config = _make_config(num_runs=50)
         engine_low = SimulationEngine(config)
-        results_low = await engine_low.run(variable_overrides={"budget": 100})
+        results_low = await engine_low.run(variable_overrides={"budget": 100}, base_seed=42)
 
-        random.seed(42)
         engine_high = SimulationEngine(config)
-        results_high = await engine_high.run(variable_overrides={"budget": 10_000_000})
+        results_high = await engine_high.run(variable_overrides={"budget": 10_000_000}, base_seed=42)
 
         # With 10M budget vs 100, success should differ meaningfully
         # (we can't guarantee direction due to the burn formula, but they shouldn't be identical)
@@ -228,15 +226,13 @@ class TestRunCountImpact:
     @pytest.mark.asyncio
     async def test_many_runs_narrower_confidence(self):
         """200 runs should produce a tighter confidence interval than 10 runs (on average)."""
-        random.seed(42)
         config_few = _make_config(num_runs=10)
         engine_few = SimulationEngine(config_few)
-        results_few = await engine_few.run()
+        results_few = await engine_few.run(base_seed=42)
 
-        random.seed(42)
         config_many = _make_config(num_runs=200)
         engine_many = SimulationEngine(config_many)
-        results_many = await engine_many.run()
+        results_many = await engine_many.run(base_seed=42)
 
         ci_width_few = results_few.confidence_interval[1] - results_few.confidence_interval[0]
         ci_width_many = results_many.confidence_interval[1] - results_many.confidence_interval[0]

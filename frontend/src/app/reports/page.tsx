@@ -4,9 +4,11 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { FileText, Loader2, ChevronRight, Download, Trash2 } from "lucide-react";
 import { listReports } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 import type { Report } from "@/types";
 
 export default function ReportsPage() {
+  const { toast } = useToast();
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -15,10 +17,13 @@ export default function ReportsPage() {
       try {
         const data = await listReports();
         setReports(data);
-      } catch {}
+      } catch (err: any) {
+        toast({ title: "failed to load reports", description: err.message || "check your connection and try again", variant: "error" });
+      }
       setLoading(false);
     }
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

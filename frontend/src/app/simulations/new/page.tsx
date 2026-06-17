@@ -20,9 +20,9 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { analyzeContext, analyzePrompt, createSimulation, runSimulationLong } from "@/lib/api";
+import { analyzeContext, analyzePrompt, createSimulation, runSimulationLong, getTemplate, parseUpload } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
-import { getCurrentUser } from "@/lib/firebase/auth";
+import { getCurrentUser, onAuthChange } from "@/lib/firebase/auth";
 import type { SimulationCategory, AIAnalysisResponse } from "@/types";
 
 // ---------- constants ----------
@@ -75,9 +75,7 @@ export default function NewSimulationPage() {
   const { toast } = useToast();
 
   const [step, setStep] = useState(1);
-  const [category, setCategory] = useState<SimulationCategory>(
-    (templateId as SimulationCategory) || "startup"
-  );
+  const [category, setCategory] = useState<SimulationCategory>("startup");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
 
@@ -106,10 +104,93 @@ export default function NewSimulationPage() {
   // Data upload
   const [uploadedData, setUploadedData] = useState<{ fileName: string; fileSize: string; rowCount: number; columns: Array<{ name: string; type: string; sample: string }> } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [parsing, setParsing] = useState(false);
 
   const [loading, setLoading] = useState(false);
 
+  // Auth guard — the context/upload endpoints require auth, so a signed-out
+  // visitor would hit 401s mid-wizard. Redirect them to login instead.
+  const [authChecked, setAuthChecked] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onAuthChange((user) => {
+      if (user) {
+        setAuthChecked(true);
+      } else {
+        router.replace("/login?next=/simulations/new");
+      }
+    });
+    return () => unsubscribe();
+  }, [router]);
+
   const totalSteps = 5;
+
+  // ---------- question prefill (dashboard empty-state gallery) ----------
+
+  const questionParam = searchParams.get("question");
+  const questionLoadedRef = useRef(false);
+
+  useEffect(() => {
+    if (!questionParam || questionLoadedRef.current) return;
+    questionLoadedRef.current = true;
+    setInputMode("prompt");
+    setPromptText(questionParam);
+    // intentionally no auto-submit — the user reviews and hits generate
+  }, [questionParam]);
+
+  // ---------- template prefill ----------
+
+  const templateLoadedRef = useRef(false);
+
+  useEffect(() => {
+    if (!templateId || templateLoadedRef.current) return;
+    templateLoadedRef.current = true;
+
+    (async () => {
+      try {
+        const t = await getTemplate(templateId);
+        const mappedVars: AIAnalysisResponse["variables"] = (t.config?.variables || []).map((v: any) => ({
+          name: v.name,
+          label: v.label,
+          value: v.value,
+          min: v.min,
+          max: v.max,
+          unit: v.unit ?? "",
+          reasoning: `from "${t.name}" template`,
+        }));
+        const mappedAgents: AIAnalysisResponse["agents"] = (t.config?.agents || []).map((a: any) => ({
+          type: a.type,
+          label: a.name,
+          count: a.count,
+          sensitivity: a.sensitivity,
+          reasoning: `from "${t.name}" template`,
+        }));
+        const data: AIAnalysisResponse = {
+          variables: mappedVars,
+          agents: mappedAgents,
+          assumptions: [],
+          successCriteria: "",
+          timeHorizon: t.config?.time_horizon ?? 12,
+          numRuns: t.config?.num_runs ?? 1000,
+        };
+
+        setName(t.name || "");
+        setDescription(t.description || "");
+        setCategory((t.category || "custom") as SimulationCategory);
+        setInputMode("form");
+        setAnalysis(data);
+        setVariables(mappedVars);
+        setAgents(mappedAgents);
+        setNumRuns(data.numRuns);
+        setTimeHorizon(data.timeHorizon);
+        if (mappedVars.length > 0) setStep(3);
+        toast({ title: "Template loaded", description: `"${t.name}" — ${mappedVars.length} variables, ${mappedAgents.length} agents`, variant: "success" });
+      } catch (e: any) {
+        toast({ title: "Failed to load template", description: e.message || "Starting from scratch instead", variant: "error" });
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templateId]);
 
   // ---------- context field helpers ----------
 
@@ -298,23 +379,36 @@ export default function NewSimulationPage() {
     if (file) processFile(file);
   }, []);
 
-  function processFile(file: File) {
+  async function processFile(file: File) {
     const ext = file.name.split(".").pop()?.toLowerCase();
-    if (!["csv", "xlsx", "xls"].includes(ext || "")) return;
+    if (!["csv", "xlsx", "xls"].includes(ext || "")) {
+      toast({ title: "Unsupported file type", description: "Upload a CSV or Excel file", variant: "error" });
+      return;
+    }
     const sizeStr = file.size < 1024 * 1024
       ? `${(file.size / 1024).toFixed(1)} KB`
       : `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
-    setUploadedData({
-      fileName: file.name,
-      fileSize: sizeStr,
-      rowCount: Math.floor(Math.random() * 5000) + 500,
-      columns: [
-        { name: "date", type: "datetime", sample: "2024-01-15" },
-        { name: "value", type: "float64", sample: "142.50" },
-        { name: "volume", type: "int64", sample: "3,241" },
-        { name: "category", type: "string", sample: "type_a" },
-      ],
-    });
+    setParsing(true);
+    try {
+      const parsed = await parseUpload(file);
+      const columns: Array<{ name: string; type: string; sample: string }> =
+        (parsed.columns || []).map((c: any) => ({
+          name: c.name,
+          type: c.type,
+          sample: c.sample ?? "",
+        }));
+      setUploadedData({
+        fileName: parsed.file_name || file.name,
+        fileSize: sizeStr,
+        rowCount: parsed.row_count ?? 0,
+        columns,
+      });
+      toast({ title: "File parsed", description: `${(parsed.row_count ?? 0).toLocaleString()} rows · ${columns.length} columns detected`, variant: "success" });
+    } catch (e: any) {
+      toast({ title: "Failed to parse file", description: e.message || "Check the file and try again", variant: "error" });
+    } finally {
+      setParsing(false);
+    }
   }
 
   // ---------- submit ----------
@@ -396,6 +490,15 @@ export default function NewSimulationPage() {
   );
 
   // ---------- render ----------
+
+  // Wait for Firebase to confirm auth before showing the wizard
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="w-5 h-5 text-white/30 animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -991,7 +1094,12 @@ export default function NewSimulationPage() {
               <span className="text-xs text-white/25 tracking-widest uppercase">upload data (optional)</span>
             </div>
             <div className="p-5">
-              {!uploadedData ? (
+              {parsing ? (
+                <div className="border border-dashed border-white/[0.15] p-5 flex flex-col items-center justify-center text-center">
+                  <Loader2 className="w-4 h-4 text-white/30 animate-spin mb-1.5" />
+                  <p className="text-[11px] text-white/35">Parsing file...</p>
+                </div>
+              ) : !uploadedData ? (
                 <div
                   className={cn("border border-dashed p-5 flex flex-col items-center justify-center text-center transition-colors cursor-pointer", dragOver ? "border-white/40 bg-white/[0.04]" : "border-white/[0.15] hover:border-white/[0.25]")}
                   onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -1008,6 +1116,7 @@ export default function NewSimulationPage() {
                   <FileSpreadsheet className="w-4 h-4 text-white/30" />
                   <span className="text-xs text-white/60">{uploadedData.fileName}</span>
                   <span className="text-[10px] text-emerald-400/70">✓ parsed</span>
+                  <span className="text-[10px] text-white/20">{uploadedData.rowCount.toLocaleString()} rows · {uploadedData.columns.length} columns</span>
                   <button onClick={() => setUploadedData(null)} className="ml-auto text-white/20 hover:text-white/50"><X className="w-3.5 h-3.5" /></button>
                 </div>
               )}

@@ -133,6 +133,25 @@ TOOL_DEFINITIONS = [
 VALID_TOOL_NAMES = {t["name"] for t in TOOL_DEFINITIONS}
 
 
+# ── Fixed Decision-Memo Outline ──────────────────────────────────────────────
+# The executive decision memo uses a FIXED set of sections (rather than an
+# LLM-planned outline) so every memo has the same recognizable structure.
+MEMO_SECTIONS = [
+    {"title": "Recommendation",
+     "focus": "State the single clearest recommended decision the simulation supports, with the headline success probability and confidence."},
+    {"title": "Evidence",
+     "focus": "Marshal the strongest quantitative evidence: success probability, confidence interval, key metrics, and the patterns that drive the recommendation."},
+    {"title": "Sensitivities",
+     "focus": "Which assumptions or variables most move the outcome. Identify the levers the decision is most sensitive to."},
+    {"title": "Risks",
+     "focus": "The top risk factors, their probability and severity, and concrete mitigations for each."},
+    {"title": "Dissent / Counterpoint",
+     "focus": "The strongest case AGAINST the recommendation: failure modes, the failure explanation, and conditions under which the decision would be wrong."},
+    {"title": "Next Questions",
+     "focus": "The most valuable open questions and follow-up analyses to de-risk the decision before committing."},
+]
+
+
 # ── ReACT Report Agent ───────────────────────────────────────────────────────
 
 class ReportAgent:
@@ -631,13 +650,17 @@ RULES:
         graph_id: Optional[str] = None,
         progress_callback: Optional[Callable[[float, str], Awaitable[None]]] = None,
         user_id: Optional[str] = None,
+        report_id: Optional[str] = None,
     ) -> Report:
         """
         Generate a full report from simulation results.
         Follows MiroFish's pipeline: plan -> iterate sections -> assemble.
+
+        A caller-supplied *report_id* lets API endpoints return the ID
+        immediately while generation continues in the background.
         """
         self.graph_id = graph_id
-        report_id = f"report_{uuid.uuid4().hex[:12]}"
+        report_id = report_id or f"report_{uuid.uuid4().hex[:12]}"
 
         report = Report(
             report_id=report_id,
@@ -709,6 +732,113 @@ RULES:
             # Persist completed report to Firestore
             await self._persist_report(report)
 
+            return report
+
+        except Exception as e:
+            report.status = "failed"
+            report.metadata["error"] = str(e)
+            progress.status = "failed"
+            progress.message = str(e)
+            await self._persist_report(report)
+            raise
+
+    async def generate_memo(
+        self,
+        report_id: str,
+        simulation_id: str,
+        simulation_data: Dict[str, Any],
+        audience: str = "exec",
+        category: str = "startup",
+        graph_id: Optional[str] = None,
+        progress_callback: Optional[Callable[[float, str], Awaitable[None]]] = None,
+        user_id: Optional[str] = None,
+    ) -> Report:
+        """
+        Generate an executive decision memo with a FIXED 6-section outline
+        (Recommendation, Evidence, Sensitivities, Risks, Dissent/Counterpoint,
+        Next Questions) instead of an LLM-planned outline.
+
+        Reuses the same per-section ReACT generation + assembly as
+        ``generate_report``; only the planning phase differs (hardcoded
+        sections). Persisted as a normal ``reports`` doc with
+        ``metadata = {"type": "memo", "audience": audience}`` so it is
+        pollable / viewable through the existing report endpoints.
+        """
+        self.graph_id = graph_id
+        category_label = category.replace("_", " ").title()
+
+        report = Report(
+            report_id=report_id,
+            simulation_id=simulation_id,
+            user_id=user_id,
+            metadata={"type": "memo", "audience": audience},
+        )
+        self._reports[report_id] = report
+
+        progress = ReportProgress(report_id=report_id, status="planning")
+        self._progress[report_id] = progress
+
+        try:
+            if progress_callback:
+                await progress_callback(5.0, "Preparing decision memo...")
+
+            success_prob = simulation_data.get("success_probability", 0)
+            report.title = f"Decision Memo — {category_label}"
+            report.summary = (
+                f"{'Executive' if audience == 'exec' else 'Technical'} decision memo "
+                f"for the {category_label.lower()} simulation "
+                f"({success_prob}% success probability)."
+            )
+
+            # FIXED outline: hardcoded memo sections (no LLM planning).
+            for i, sec_def in enumerate(MEMO_SECTIONS):
+                report.sections.append(ReportSection(
+                    index=i,
+                    title=sec_def["title"],
+                    content=sec_def["focus"],
+                ))
+
+            progress.total_sections = len(report.sections)
+            progress.status = "generating"
+
+            if progress_callback:
+                await progress_callback(15.0, f"Writing {len(report.sections)} memo sections...")
+
+            # Reuse the existing per-section ReACT generation.
+            completed_sections: List[ReportSection] = []
+            for i, section in enumerate(report.sections):
+                progress.current_section = i + 1
+                section.status = "generating"
+
+                if progress_callback:
+                    pct = 15 + (i / len(report.sections)) * 75
+                    await progress_callback(pct, f"Writing: {section.title}")
+
+                content = await self._generate_section_react(
+                    section=section,
+                    simulation_data=simulation_data,
+                    category=category,
+                    previous_sections=completed_sections,
+                    progress_callback=progress_callback,
+                )
+
+                section.content = content
+                section.status = "completed"
+                completed_sections.append(section)
+                progress.sections_completed.append(i)
+
+            if progress_callback:
+                await progress_callback(92.0, "Assembling memo...")
+
+            report.full_markdown = self._assemble_report(report)
+            report.status = "completed"
+            progress.status = "completed"
+            progress.percent = 100.0
+
+            if progress_callback:
+                await progress_callback(100.0, "Memo complete!")
+
+            await self._persist_report(report)
             return report
 
         except Exception as e:

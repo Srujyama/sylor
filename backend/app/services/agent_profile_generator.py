@@ -77,14 +77,56 @@ class AgentProfile:
         }
 
     def to_monte_carlo_config(self) -> Dict[str, Any]:
-        """Convert to config usable by Sylor's SimulationEngine."""
+        """Convert to config usable by Sylor's SimulationEngine.
+
+        Carries the full persona parameter set so the engine's agents can
+        genuinely modulate their behavior (sensitivity scales reaction
+        magnitude, risk_tolerance shifts thresholds, activity_level scales
+        action frequency, influence_weight scales market effect, sentiment_bias
+        shifts drift). The shape matches ``AgentConfig`` so callers can splat it
+        straight into the pydantic model.
+        """
         return {
             "type": self.agent_type,
             "name": self.name,
             "count": 1,
             "sensitivity": self.sensitivity,
+            "activity_level": self.activity_level,
+            "influence_weight": self.influence_weight,
+            "sentiment_bias": self.sentiment_bias,
+            "risk_tolerance": self.risk_tolerance,
+            "decision_style": self.decision_style,
             "behavior_rules": self.behavior_rules,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AgentProfile":
+        """Reconstruct an AgentProfile from a ``to_dict`` payload.
+
+        Used by the orchestrator to rebuild profiles persisted on a project
+        and feed them back through ``to_monte_carlo_config``.
+        """
+        return cls(
+            agent_id=data.get("agent_id", f"agent_{uuid.uuid4().hex[:8]}"),
+            name=data.get("name", "Agent"),
+            agent_type=data.get("agent_type", "market"),
+            entity_name=data.get("entity_name"),
+            description=data.get("description", ""),
+            personality=data.get("personality", ""),
+            goals=data.get("goals", []),
+            background=data.get("background", ""),
+            decision_style=data.get("decision_style", "balanced"),
+            sensitivity=float(data.get("sensitivity", 0.7)),
+            activity_level=float(data.get("activity_level", 0.5)),
+            influence_weight=float(data.get("influence_weight", 0.5)),
+            sentiment_bias=float(data.get("sentiment_bias", 0.0)),
+            risk_tolerance=float(data.get("risk_tolerance", 0.5)),
+            behavior_rules=data.get("behavior_rules", []),
+            interaction_patterns=data.get("interaction_patterns", []),
+            memory=data.get("memory", []),
+            source=data.get("source", "generated"),
+            entity_uuid=data.get("entity_uuid"),
+        )
 
 
 class AgentProfileGenerator:

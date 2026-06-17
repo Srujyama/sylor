@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Plus, FolderKanban, Loader2, Trash2, Network, FileText, Play } from "lucide-react";
 import { listProjects, deleteProject } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 import type { Project } from "@/types";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -19,19 +20,21 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export default function ProjectsPage() {
+  const { toast } = useToast();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     loadProjects();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadProjects() {
     try {
       const data = await listProjects();
       setProjects(data);
-    } catch {
-      // API may not be running yet
+    } catch (err: any) {
+      toast({ title: "failed to load projects", description: err.message || "check your connection and try again", variant: "error" });
     } finally {
       setLoading(false);
     }
@@ -42,7 +45,9 @@ export default function ProjectsPage() {
     try {
       await deleteProject(projectId);
       setProjects((prev) => prev.filter((p) => p.project_id !== projectId));
-    } catch {}
+    } catch (err: any) {
+      toast({ title: "failed to delete project", description: err.message || "try again in a moment", variant: "error" });
+    }
   }
 
   return (

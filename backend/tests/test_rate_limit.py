@@ -182,6 +182,7 @@ class TestBucketCleanup:
 class TestIsExpensivePath:
     @pytest.mark.parametrize("path", [
         "/api/simulations/abc123/run",
+        "/api/simulations/abc123/run/stream",
         "/api/simulations/abc123/sweep",
         "/api/context/analyze",
         "/api/reports/generate",
@@ -189,6 +190,7 @@ class TestIsExpensivePath:
         "/api/reports/chat",
         "/api/projects/p1/build-graph",
         "/api/projects/p1/generate-profiles",
+        "/api/projects/p1/run-simulation",
         "/api/projects/p1/generate-report",
         "/api/projects/p1/chat",
     ])
@@ -206,3 +208,102 @@ class TestIsExpensivePath:
     def test_normal_paths_not_expensive(self, path):
         """Regular CRUD paths should not be flagged as expensive."""
         assert rl_module._is_expensive_path(path) is False
+
+
+# ---------------------------------------------------------------------------
+# Verified-token identity (anti-spoofing)
+# ---------------------------------------------------------------------------
+
+class TestVerifiedIdentity:
+    def test_authenticated_bucket_keyed_by_uid(self, mock_firebase):
+        """The rate-limit key must be the VERIFIED uid, not the raw token."""
+        client = TestClient(app)
+        res = client.get("/api/simulations", headers=AUTH_HEADER)
+        assert res.status_code == 200
+        keys = [k for k in rl_module._buckets if k[1] == "auth"]
+        assert keys == [("user:test-user-123", "auth")]
+
+    def test_rotating_fake_tokens_share_the_ip_bucket(self, mock_firebase):
+        """Spoofed bearer tokens cannot escape the per-IP unauthenticated limit."""
+        client = TestClient(app)
+        for i in range(rl_module.UNAUTH_LIMIT):
+            res = client.get(
+                "/api/templates",
+                headers={"Authorization": f"Bearer fake-token-{i}"},
+            )
+            assert res.status_code == 200, f"Request {i+1} should pass"
+
+        # Even with yet another fresh token, the shared per-IP bucket is full
+        res = client.get(
+            "/api/templates",
+            headers={"Authorization": "Bearer fake-token-final"},
+        )
+        assert res.status_code == 429
+
+    def test_verification_result_is_cached(self, mock_firebase):
+        """Repeat requests with the same token must not re-verify every time."""
+        from unittest.mock import patch as mock_patch
+        from unittest.mock import AsyncMock
+
+        client = TestClient(app)
+        verify = AsyncMock(return_value={"uid": "test-user-123"})
+        with mock_patch("app.middleware.rate_limit.verify_id_token", verify):
+            for _ in range(5):
+                client.get("/api/simulations", headers=AUTH_HEADER)
+        assert verify.await_count == 1
+
+    def test_x_forwarded_for_first_entry_not_trusted(self, mock_firebase):
+        """Clients cannot reset their bucket by spoofing the XFF first entry."""
+        client = TestClient(app)
+        for i in range(rl_module.UNAUTH_LIMIT):
+            res = client.get(
+                "/api/templates",
+                headers={"x-forwarded-for": f"10.0.0.{i}, 198.51.100.7"},
+            )
+            assert res.status_code == 200, f"Request {i+1} should pass"
+
+        # Rotating the client-controlled first hop doesn't help: the
+        # proxy-appended last hop is what gets keyed.
+        res = client.get(
+            "/api/templates",
+            headers={"x-forwarded-for": "10.99.99.99, 198.51.100.7"},
+        )
+        assert res.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# Expensive-tier double-counting regression
+# ---------------------------------------------------------------------------
+
+class TestExpensiveNotDoubleCounted:
+    """require_expensive_rate_limit must not consume a second slot for paths
+    the middleware already classifies as expensive (would halve the limit)."""
+
+    @pytest.mark.asyncio
+    async def test_dependency_is_noop_on_expensive_path(self, mock_firebase):
+        from unittest.mock import MagicMock
+        from app.middleware.rate_limit import require_expensive_rate_limit
+
+        rl_module._buckets.clear()
+        req = MagicMock()
+        req.url.path = "/api/simulations/abc123/run"
+        # Expensive path: the middleware owns enforcement, so the dependency
+        # must add nothing to the expensive bucket.
+        await require_expensive_rate_limit(req)
+        expensive_keys = [k for k in rl_module._buckets if k[1] == "expensive"]
+        assert expensive_keys == []
+
+    @pytest.mark.asyncio
+    async def test_dependency_still_enforces_on_non_suffix_path(self, mock_firebase):
+        from unittest.mock import MagicMock
+        from app.middleware.rate_limit import require_expensive_rate_limit
+
+        rl_module._buckets.clear()
+        req = MagicMock()
+        req.url.path = "/api/some/future/endpoint"  # not in _EXPENSIVE_SUFFIXES
+        req.headers = {}
+        req.client = MagicMock()
+        req.client.host = "203.0.113.5"
+        await require_expensive_rate_limit(req)
+        expensive_keys = [k for k in rl_module._buckets if k[1] == "expensive"]
+        assert len(expensive_keys) == 1

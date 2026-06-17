@@ -1,10 +1,14 @@
 """
 AI-powered insights generation using Claude API.
 """
+import logging
+
 import anthropic
 from typing import Optional, Dict, Any
 from app.config import settings
 from app.models.simulation import SimulationConfig, SimulationResults
+
+logger = logging.getLogger(__name__)
 
 
 def _format_company_context(context: Dict[str, Any]) -> str:
@@ -118,7 +122,7 @@ Format as JSON:
         if start >= 0 and end > start:
             return json.loads(text[start:end])
     except Exception as e:
-        pass
+        logger.warning("AI insights call failed, using fallback insights: %s", e)
 
     # Fallback insights
     return {

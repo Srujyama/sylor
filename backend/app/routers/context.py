@@ -2,116 +2,31 @@
 AI-powered context analysis endpoint.
 Takes a user's company/scenario context and uses Claude to generate
 realistic simulation variables, agent configs, and assumptions.
+
+LLM access goes through the shared ``llm_client`` singleton (Wave E unified
+all routers onto it). The client owns the Anthropic API surface, retry logic,
+and a 4-strategy JSON repair pipeline, so this module no longer carries its
+own raw ``anthropic.AsyncAnthropic`` client or bespoke JSON repair.
 """
 import json
-import re
-import anthropic
-from fastapi import APIRouter, HTTPException
+import logging
+from fastapi import APIRouter, HTTPException, Depends
 from app.config import settings
+from app.middleware.auth import get_current_user
 from app.models.simulation import CompanyContext, ContextAnalysisResponse, PromptRequest, PromptAnalysisResponse
+from app.services.llm_client import llm_client
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/context", tags=["context"])
 
-
-def _repair_truncated_json(text: str) -> str:
-    """
-    Attempt to repair a truncated JSON string by:
-    1. Closing any open string literal
-    2. Closing open arrays/objects in the right order
-    3. Stripping the last incomplete key-value pair before closing
-    """
-    s = text.rstrip()
-
-    # Track structure using a stack
-    stack = []        # 'o' = object, 'a' = array
-    in_string = False
-    escape_next = False
-
-    for ch in s:
-        if escape_next:
-            escape_next = False
-            continue
-        if ch == '\\' and in_string:
-            escape_next = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch == '{':
-            stack.append('o')
-        elif ch == '[':
-            stack.append('a')
-        elif ch in ']}':
-            if stack:
-                stack.pop()
-
-    # If we're mid-string, close it
-    if in_string:
-        s += '"'
-
-    # Remove trailing incomplete item (e.g. `, "key": ` or `, {` )
-    s = re.sub(r',\s*"[^"]*"?\s*:\s*[^,\}\]]*$', '', s)
-    s = re.sub(r',\s*\{[^}]*$', '', s)
-    s = re.sub(r',\s*"[^"]*$', '', s)
-
-    # Strip trailing comma
-    s = re.sub(r',\s*$', '', s)
-
-    # Close open structures in reverse order
-    for kind in reversed(stack):
-        s += ']' if kind == 'a' else '}'
-
-    return s
-
-
-def _extract_json(text: str) -> dict:
-    """
-    Robustly extract a JSON object from Claude's response.
-    Handles: markdown code fences, trailing commas, JS comments,
-    control characters, and truncated responses.
-    """
-    # 1. Strip markdown code fences
-    fenced = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
-    if fenced:
-        text = fenced.group(1).strip()
-
-    # 2. Isolate the JSON object (everything from first { to last })
-    start = text.find("{")
-    if start < 0:
-        raise ValueError("No JSON object found in response")
-    end = text.rfind("}") + 1
-    if end <= start:
-        raise ValueError("No complete JSON object found in response")
-    raw = text[start:end]
-
-    # 3. Standard cleanups
-    # a) Remove // line comments (only outside strings — simple heuristic)
-    raw = re.sub(r'(?<!["\w])//[^\n]*', '', raw)
-    # b) Remove trailing commas before } or ]
-    raw = re.sub(r',(\s*[}\]])', r'\1', raw)
-    # c) Replace bare control characters (real newlines/tabs inside strings)
-    #    Only replace inside string literals
-    def fix_control_chars(m):
-        s = m.group(0)
-        s = s.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
-        return s
-    raw = re.sub(r'"(?:[^"\\]|\\.)*"', fix_control_chars, raw, flags=re.DOTALL)
-
-    # 4. Fast path
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-
-    # 5. Truncation recovery — the response was cut off at max_tokens
-    repaired = _repair_truncated_json(raw)
-    repaired = re.sub(r',(\s*[}\]])', r'\1', repaired)
-    try:
-        return json.loads(repaired)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Could not parse JSON from AI response: {e}") from e
+_GENERATOR_SYSTEM = (
+    "You are a simulation configuration generator. "
+    "You MUST respond with ONLY a single valid JSON object — "
+    "no markdown, no code fences, no comments, no explanation before or after. "
+    "The JSON must be syntactically valid and COMPLETE — never truncate. "
+    "Keep all 'reasoning' field values under 15 words to stay within token limits."
+)
 
 
 def _build_prompt(category: str, context: dict) -> str:
@@ -299,7 +214,7 @@ RULES:
 
 
 @router.post("/analyze", response_model=ContextAnalysisResponse)
-async def analyze_context(body: CompanyContext):
+async def analyze_context(body: CompanyContext, user: dict = Depends(get_current_user)):
     """Analyze user's company/scenario context using Claude and generate simulation parameters."""
 
     if not settings.anthropic_api_key:
@@ -309,29 +224,16 @@ async def analyze_context(body: CompanyContext):
     if not prompt:
         raise HTTPException(status_code=400, detail=f"Unsupported category: {body.category}")
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-
     try:
-        # Use streaming to collect the full response — avoids read-timeout on slow connections
-        # and lets us start parsing as soon as the last token arrives.
-        text_chunks: list[str] = []
-        async with client.messages.stream(
-            model="claude-sonnet-4-6",
-            max_tokens=8000,  # Enough for 25 variables with full reasoning
-            system=(
-                "You are a simulation configuration generator. "
-                "You MUST respond with ONLY a single valid JSON object — "
-                "no markdown, no code fences, no comments, no explanation before or after. "
-                "The JSON must be syntactically valid and COMPLETE — never truncate. "
-                "Keep all 'reasoning' field values under 15 words to stay within token limits."
-            ),
+        # Stream-collect (avoids read-timeout on slow connections) through the
+        # shared client, then parse with its robust JSON repair pipeline.
+        text = await llm_client.stream_collect(
             messages=[{"role": "user", "content": prompt}],
-        ) as stream:
-            async for chunk in stream.text_stream:
-                text_chunks.append(chunk)
-
-        text = "".join(text_chunks)
-        data = _extract_json(text)
+            system=_GENERATOR_SYSTEM,
+            temperature=0.3,
+            max_tokens=8000,  # Enough for 25 variables with full reasoning
+        )
+        data = llm_client._extract_json(text)
 
         return ContextAnalysisResponse(
             variables=data.get("variables", []),
@@ -342,14 +244,15 @@ async def analyze_context(body: CompanyContext):
             num_runs=int(data.get("num_runs", 1000)),
         )
 
-    except anthropic.APIError as e:
-        raise HTTPException(status_code=502, detail=f"Claude API error: {str(e)}")
     except (json.JSONDecodeError, ValueError) as e:
         raise HTTPException(status_code=502, detail=f"Failed to parse AI response: {str(e)}")
+    except Exception as e:
+        logger.warning("Context analysis LLM call failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"Claude API error: {str(e)}")
 
 
 @router.post("/analyze-prompt", response_model=PromptAnalysisResponse)
-async def analyze_prompt(body: PromptRequest):
+async def analyze_prompt(body: PromptRequest, user: dict = Depends(get_current_user)):
     """
     Generate a full simulation from a free-text user prompt.
     Claude auto-detects the best category, generates a name/description,
@@ -407,27 +310,14 @@ RULES:
 6. Success criteria must be specific to this scenario.
 7. The name should be descriptive but concise — not generic."""
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-
     try:
-        text_chunks: list[str] = []
-        async with client.messages.stream(
-            model="claude-sonnet-4-6",
-            max_tokens=8000,
-            system=(
-                "You are a simulation configuration generator. "
-                "You MUST respond with ONLY a single valid JSON object — "
-                "no markdown, no code fences, no comments, no explanation before or after. "
-                "The JSON must be syntactically valid and COMPLETE — never truncate. "
-                "Keep all 'reasoning' field values under 15 words to stay within token limits."
-            ),
+        text = await llm_client.stream_collect(
             messages=[{"role": "user", "content": prompt}],
-        ) as stream:
-            async for chunk in stream.text_stream:
-                text_chunks.append(chunk)
-
-        text = "".join(text_chunks)
-        data = _extract_json(text)
+            system=_GENERATOR_SYSTEM,
+            temperature=0.3,
+            max_tokens=8000,
+        )
+        data = llm_client._extract_json(text)
 
         return PromptAnalysisResponse(
             category=data.get("category", "custom"),
@@ -441,7 +331,8 @@ RULES:
             num_runs=int(data.get("num_runs", 1000)),
         )
 
-    except anthropic.APIError as e:
-        raise HTTPException(status_code=502, detail=f"Claude API error: {str(e)}")
     except (json.JSONDecodeError, ValueError) as e:
         raise HTTPException(status_code=502, detail=f"Failed to parse AI response: {str(e)}")
+    except Exception as e:
+        logger.warning("Prompt analysis LLM call failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"Claude API error: {str(e)}")

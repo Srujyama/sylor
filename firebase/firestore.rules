@@ -11,6 +11,16 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    // The backend (Admin SDK) writes snake_case `user_id`; the frontend's
+    // direct Firestore path writes camelCase `userId`. Both shapes exist in
+    // the `simulations` collection, so ownership accepts either field.
+    function ownsDoc(data) {
+      return isSignedIn() && (
+        ('user_id' in data && data.user_id == request.auth.uid) ||
+        ('userId' in data && data.userId == request.auth.uid)
+      );
+    }
+
     // ── profiles ────────────────────────────────────────────────
     match /profiles/{userId} {
       allow read:   if isOwner(userId);
@@ -20,25 +30,43 @@ service cloud.firestore {
     }
 
     // ── simulations ─────────────────────────────────────────────
+    // Backend-written docs: { user_id, created_at, updated_at, ... }
+    // Frontend-written docs: { userId, createdAt, updatedAt, ... }
     match /simulations/{simId} {
-      allow read:   if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow read:   if ownsDoc(resource.data);
+      allow create: if ownsDoc(request.resource.data);
+      allow update: if ownsDoc(resource.data) && ownsDoc(request.resource.data);
+      allow delete: if ownsDoc(resource.data);
     }
 
     // ── simulation_runs ─────────────────────────────────────────
+    // Runs belong to whoever owns the parent simulation; creating a run
+    // requires ownership of that simulation (not just being signed in).
+    // The backend (Admin SDK) writes snake_case `simulation_id`; legacy
+    // frontend-written docs use camelCase `simulationId` — accept both.
+    function runSimId(data) {
+      return ('simulation_id' in data) ? data.simulation_id : data.simulationId;
+    }
+
     match /simulation_runs/{runId} {
       allow read: if isSignedIn() &&
-        get(/databases/$(database)/documents/simulations/$(resource.data.simulationId)).data.userId
-          == request.auth.uid;
-      allow create: if isSignedIn();
+        ownsDoc(get(/databases/$(database)/documents/simulations/$(runSimId(resource.data))).data);
+      allow create: if isSignedIn() &&
+        ownsDoc(get(/databases/$(database)/documents/simulations/$(runSimId(request.resource.data))).data);
       allow update: if false;
       allow delete: if false;
     }
 
+    // ── shares ──────────────────────────────────────────────────
+    // Public share snapshots are served exclusively by the backend
+    // (GET /api/shared/{share_id} via Admin SDK). No client access.
+    match /shares/{shareId} {
+      allow read, write: if false;
+    }
+
     // ── knowledge_graphs ────────────────────────────────────────
-    // Written by backend Admin SDK; client can read own graphs
+    // Written by backend Admin SDK ({ user_id, created_at, ... });
+    // client can read own graphs
     match /knowledge_graphs/{graphId} {
       allow read:   if isSignedIn() && resource.data.user_id == request.auth.uid;
       allow create: if false; // Admin SDK only
@@ -46,8 +74,19 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ── projects ────────────────────────────────────────────────
+    // Written by backend Admin SDK ({ user_id, created_at, ... });
+    // client can read own projects
+    match /projects/{projectId} {
+      allow read:   if isSignedIn() && resource.data.user_id == request.auth.uid;
+      allow create: if false; // Admin SDK only
+      allow update: if false;
+      allow delete: if false;
+    }
+
     // ── tasks ───────────────────────────────────────────────────
-    // Written by backend Admin SDK; client can read own tasks
+    // Written by backend Admin SDK ({ user_id, created_at, ... });
+    // client can read own tasks
     match /tasks/{taskId} {
       allow read:   if isSignedIn() && resource.data.user_id == request.auth.uid;
       allow create: if false;
@@ -56,7 +95,8 @@ service cloud.firestore {
     }
 
     // ── reports ─────────────────────────────────────────────────
-    // Written by backend Admin SDK; client can read own reports
+    // Written by backend Admin SDK ({ user_id, created_at, ... });
+    // client can read own reports
     match /reports/{reportId} {
       allow read:   if isSignedIn() && resource.data.user_id == request.auth.uid;
       allow create: if false;

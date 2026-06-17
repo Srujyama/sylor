@@ -138,6 +138,8 @@ export default function ComparisonPage() {
       setError(null);
       const data = await compareSimulations(idList);
       setComparisons(data.comparisons || []);
+      // Mark the "compare two sims" activation step as done (Wave J).
+      try { localStorage.setItem("sylor-compared", "1"); } catch {}
     } catch (err: any) {
       setError(err.message || "Failed to load comparison data.");
     } finally {
@@ -174,10 +176,15 @@ export default function ComparisonPage() {
       setLoading(false);
       return;
     }
-    if (ids) {
+    const idList = ids ? ids.split(",").filter(Boolean) : [];
+    if (idList.length >= 2) {
       setSelectorMode(false);
       fetchComparison();
     } else {
+      // fewer than 2 ids — open the selector with any provided ids preselected
+      if (idList.length > 0) {
+        setSelectedIds((prev) => new Set([...Array.from(prev), ...idList]));
+      }
       setSelectorMode(true);
       fetchAllSimulations();
     }

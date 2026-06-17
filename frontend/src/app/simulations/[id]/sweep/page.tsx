@@ -3,6 +3,7 @@
 export const dynamic = "force-dynamic";
 
 import { useEffect, useState, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -45,6 +46,7 @@ interface Variable {
 }
 
 export default function SweepPage({ params }: { params: { id: string } }) {
+  const searchParams = useSearchParams();
   const [authReady, setAuthReady] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [simulation, setSimulation] = useState<any>(null);
@@ -82,17 +84,23 @@ export default function SweepPage({ params }: { params: { id: string } }) {
 
       const vars: Variable[] = data?.config?.variables || [];
       if (vars.length > 0) {
-        const first = vars[0];
-        setSelectedVariable(first.name);
-        setMinValue(first.min ?? Math.round(first.value * 0.2));
-        setMaxValue(first.max ?? Math.round(first.value * 3));
+        // Copilot "sweep" suggestions prefill via ?variable=&min=&max=.
+        const qVar = searchParams.get("variable");
+        const qMin = searchParams.get("min");
+        const qMax = searchParams.get("max");
+        const chosen = (qVar && vars.find((v) => v.name === qVar)) || vars[0];
+        setSelectedVariable(chosen.name);
+        const minNum = qMin != null && !Number.isNaN(Number(qMin)) ? Number(qMin) : null;
+        const maxNum = qMax != null && !Number.isNaN(Number(qMax)) ? Number(qMax) : null;
+        setMinValue(minNum ?? chosen.min ?? Math.round(chosen.value * 0.2));
+        setMaxValue(maxNum ?? chosen.max ?? Math.round(chosen.value * 3));
       }
     } catch (err: any) {
       setError(err.message || "Failed to load simulation");
     } finally {
       setLoading(false);
     }
-  }, [params.id]);
+  }, [params.id, searchParams]);
 
   useEffect(() => {
     if (!authReady) return;

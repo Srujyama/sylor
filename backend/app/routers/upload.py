@@ -5,8 +5,10 @@ Accepts CSV/Excel files, returns parsed columns with statistics.
 import io
 import csv
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from pydantic import BaseModel
+
+from app.middleware.auth import get_current_user
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
 
@@ -20,6 +22,14 @@ class ColumnInfo(BaseModel):
     mean: Optional[float] = None
     std: Optional[float] = None
     non_null_count: int = 0
+    # Raw numeric series (capped) for downstream use such as calibration, which
+    # needs the actual distribution, not just summary stats. None for non-numeric
+    # columns. Bounded so the parse response stays small.
+    values: Optional[List[float]] = None
+
+
+# Max raw numeric values returned per column (keeps the response bounded).
+_MAX_COLUMN_VALUES = 2000
 
 
 class ParseResponse(BaseModel):
@@ -82,11 +92,14 @@ def compute_stats(values: List[str], col_type: str) -> Dict[str, Any]:
         "mean": round(statistics.mean(nums), 4),
         "std": round(statistics.stdev(nums), 4) if len(nums) > 1 else 0,
         "non_null_count": len(nums),
+        # The raw series (capped) so calibration can fit against the real
+        # distribution rather than a single summary statistic.
+        "values": [round(n, 6) for n in nums[:_MAX_COLUMN_VALUES]],
     }
 
 
 @router.post("/parse", response_model=ParseResponse)
-async def parse_file(file: UploadFile = File(...)):
+async def parse_file(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     """Parse an uploaded CSV or Excel file and return column info + statistics."""
 
     # Validate file type

@@ -1,17 +1,22 @@
 "use client";
 
+export const dynamic = 'force-dynamic';
+
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, FileText, Download, MessageSquare, Loader2, Copy, Check } from "lucide-react";
-import { getReport, chatWithReportDirect } from "@/lib/api";
-import type { Report } from "@/types";
+import { getReport, getReportProgress, chatWithReportDirect } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
+import type { Report, ReportProgress } from "@/types";
 
 export default function ReportDetailPage() {
   const params = useParams();
   const reportId = params.id as string;
+  const { toast } = useToast();
 
   const [report, setReport] = useState<Report | null>(null);
+  const [progress, setProgress] = useState<ReportProgress | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeSection, setActiveSection] = useState(0);
   const [copied, setCopied] = useState(false);
@@ -25,11 +30,33 @@ export default function ReportDetailPage() {
       try {
         const data = await getReport(reportId);
         setReport(data);
-      } catch {}
+      } catch (err: any) {
+        toast({ title: "failed to load report", description: err.message || "check your connection and try again", variant: "error" });
+      }
       setLoading(false);
     }
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportId]);
+
+  // Reports navigated to right after POST /api/reports/generate are still
+  // generating — poll progress every 2s and refresh once generation finishes.
+  useEffect(() => {
+    if (!report || report.status === "completed" || report.status === "failed") return;
+    const interval = setInterval(async () => {
+      try {
+        const p = await getReportProgress(reportId);
+        setProgress(p);
+        if (p.status === "completed" || p.status === "failed") {
+          const data = await getReport(reportId);
+          setReport(data);
+        }
+      } catch {
+        // transient poll errors — the next tick retries
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [report, reportId]);
 
   async function handleCopy() {
     if (report?.full_markdown) {
@@ -102,6 +129,25 @@ export default function ReportDetailPage() {
           </button>
         </div>
       </div>
+
+      {/* Generation progress (report opened while still generating) */}
+      {report.status !== "completed" && report.status !== "failed" && (
+        <div className="mb-6 p-4 border border-white/[0.08] rounded-lg bg-white/[0.02]">
+          <div className="flex items-center gap-3 mb-2">
+            <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+            <span className="text-sm text-white/70">{progress?.message || "generating report..."}</span>
+          </div>
+          <div className="w-full bg-white/[0.06] rounded-full h-1.5">
+            <div
+              className="bg-blue-500 h-1.5 rounded-full transition-all duration-500"
+              style={{ width: `${progress?.percent ?? 0}%` }}
+            />
+          </div>
+          <p className="text-[10px] text-white/25 mt-1">
+            {progress ? `section ${progress.current_section} of ${progress.total_sections}` : "starting..."}
+          </p>
+        </div>
+      )}
 
       <div className="flex gap-6">
         {/* Main Content */}

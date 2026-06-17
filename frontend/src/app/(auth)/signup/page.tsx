@@ -27,6 +27,15 @@ export default function SignupPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
   const router = useRouter();
+  // Arriving from the /demo "save this simulation" CTA — the demo is claimed
+  // automatically on first dashboard load (see useDemoClaim). Read the flag from
+  // the URL on the client (avoids a useSearchParams CSR-bailout on this page).
+  const [claiming, setClaiming] = useState(false);
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setClaiming(new URLSearchParams(window.location.search).get("claim") === "1");
+    }
+  }, []);
 
   // Once Firebase confirms auth state, navigate to dashboard
   useEffect(() => {
@@ -90,6 +99,12 @@ export default function SignupPage() {
 
           <h1 className="text-2xl font-bold text-white mb-1">Start simulating</h1>
           <p className="text-sm text-muted-foreground mb-4">Create your free account</p>
+
+          {claiming && (
+            <div className="text-xs text-violet-300 bg-violet-500/10 border border-violet-500/20 px-3 py-2 mb-4 rounded-lg">
+              sign up and we&apos;ll save your demo simulation straight to your dashboard.
+            </div>
+          )}
 
           {/* Benefits */}
           <div className="grid grid-cols-2 gap-2 mb-6">

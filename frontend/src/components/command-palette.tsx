@@ -1,20 +1,81 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
   Search, LayoutDashboard, Layers, BarChart3, LayoutTemplate,
-  BookOpen, Settings, Plus, ArrowRight, Command,
+  BookOpen, Settings, Plus, ArrowRight, Command, GitBranch, Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { listSimulations } from "@/lib/api";
+import { getCurrentUser } from "@/lib/firebase/auth";
 
-interface CommandItem {
+const RECENTS_KEY = "sylor-recents";
+
+interface SimEntry {
   id: string;
-  label: string;
-  description: string;
-  icon: React.ElementType;
-  action: () => void;
+  name: string;
+  status: string;
+  success: number | null;
+  updatedAt: string;
+}
+
+interface PaletteEntry {
+  id: string;
   section: string;
+  label: string;
+  description?: string;
+  icon?: React.ElementType;
+  sim?: SimEntry;
+  action: () => void;
+}
+
+const statusDotClass: Record<string, string> = {
+  completed: "dot-green",
+  running: "dot-blue",
+  failed: "dot-red",
+  draft: "dot-yellow",
+};
+
+// Simple subsequence fuzzy score — higher is better, -1 means no match.
+// Rewards consecutive matches and matches near the start of the string.
+function fuzzyScore(query: string, text: string): number {
+  const q = query.toLowerCase();
+  const t = text.toLowerCase();
+  if (!q) return 0;
+  let qi = 0;
+  let score = 0;
+  let streak = 0;
+  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+    if (t[ti] === q[qi]) {
+      qi++;
+      streak++;
+      score += 1 + streak; // consecutive chars compound
+      if (ti === qi - 1) score += 2; // prefix match bonus
+    } else {
+      streak = 0;
+    }
+  }
+  return qi === q.length ? score : -1;
+}
+
+function readRecents(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushRecent(simId: string) {
+  try {
+    const next = [simId, ...readRecents().filter((id) => id !== simId)].slice(0, 5);
+    localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+  } catch {
+    // localStorage unavailable — recents just won't persist
+  }
 }
 
 export function CommandPalette() {
@@ -22,29 +83,119 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [sims, setSims] = useState<SimEntry[] | null>(null);
+  const [simsLoading, setSimsLoading] = useState(false);
+  const [recents, setRecents] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const commands: CommandItem[] = [
-    { id: "new-sim", label: "New Simulation", description: "Create a new Monte Carlo simulation", icon: Plus, action: () => router.push("/simulations/new"), section: "Actions" },
-    { id: "dashboard", label: "Dashboard", description: "Go to dashboard", icon: LayoutDashboard, action: () => router.push("/dashboard"), section: "Navigation" },
-    { id: "simulations", label: "Simulations", description: "View all simulations", icon: Layers, action: () => router.push("/simulations"), section: "Navigation" },
-    { id: "analytics", label: "Analytics", description: "View analytics & insights", icon: BarChart3, action: () => router.push("/analytics"), section: "Navigation" },
-    { id: "templates", label: "Templates", description: "Browse simulation templates", icon: LayoutTemplate, action: () => router.push("/templates"), section: "Navigation" },
-    { id: "docs", label: "Documentation", description: "Read the docs", icon: BookOpen, action: () => router.push("/docs"), section: "Navigation" },
-    { id: "settings", label: "Settings", description: "Account & preferences", icon: Settings, action: () => router.push("/settings"), section: "Navigation" },
-    { id: "startup-template", label: "SaaS Launch Template", description: "Start with SaaS launch template", icon: Plus, action: () => router.push("/simulations/new?template=startup"), section: "Quick Start" },
-    { id: "finance-template", label: "Stock Portfolio Template", description: "Start with finance template", icon: Plus, action: () => router.push("/simulations/new?template=finance"), section: "Quick Start" },
-    { id: "biology-template", label: "Molecular Dynamics Template", description: "Start with biology template", icon: Plus, action: () => router.push("/simulations/new?template=biology"), section: "Quick Start" },
-  ];
+  const navigate = useCallback(
+    (path: string) => router.push(path),
+    [router]
+  );
 
-  const filtered = query.trim()
-    ? commands.filter((c) =>
-        c.label.toLowerCase().includes(query.toLowerCase()) ||
-        c.description.toLowerCase().includes(query.toLowerCase())
+  const navigateToSim = useCallback(
+    (simId: string) => {
+      pushRecent(simId);
+      router.push(`/simulations/${simId}`);
+    },
+    [router]
+  );
+
+  // Fetch the user's simulations once per open — cached in state for the session
+  useEffect(() => {
+    if (!open) return;
+    setRecents(readRecents());
+    let cancelled = false;
+    const user = getCurrentUser();
+    if (!user?.uid) {
+      setSims([]);
+      return;
+    }
+    setSimsLoading(true);
+    listSimulations(user.uid)
+      .then((data: any[]) => {
+        if (cancelled) return;
+        const mapped: SimEntry[] = (data || [])
+          .map((s: any) => ({
+            id: s.id,
+            name: s.name,
+            status: s.status,
+            success: s.results?.success_probability ?? null,
+            updatedAt: s.updated_at,
+          }))
+          .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        setSims(mapped);
+      })
+      .catch(() => { if (!cancelled) setSims([]); })
+      .finally(() => { if (!cancelled) setSimsLoading(false); });
+    return () => { cancelled = true; };
+  }, [open]);
+
+  const actions: PaletteEntry[] = useMemo(() => [
+    { id: "new-sim", section: "actions", label: "New Simulation", description: "Create a new Monte Carlo simulation", icon: Plus, action: () => navigate("/simulations/new") },
+    { id: "compare-sims", section: "actions", label: "Compare Simulations", description: "Compare results side by side", icon: GitBranch, action: () => navigate("/simulations/compare") },
+    { id: "dashboard", section: "actions", label: "Dashboard", description: "Go to dashboard", icon: LayoutDashboard, action: () => navigate("/dashboard") },
+    { id: "simulations", section: "actions", label: "Simulations", description: "View all simulations", icon: Layers, action: () => navigate("/simulations") },
+    { id: "analytics", section: "actions", label: "Analytics", description: "View analytics & insights", icon: BarChart3, action: () => navigate("/analytics") },
+    { id: "templates", section: "actions", label: "Templates", description: "Browse simulation templates", icon: LayoutTemplate, action: () => navigate("/templates") },
+    { id: "docs", section: "actions", label: "Documentation", description: "Read the docs", icon: BookOpen, action: () => navigate("/docs") },
+    { id: "settings", section: "actions", label: "Settings", description: "Account & preferences", icon: Settings, action: () => navigate("/settings") },
+  ], [navigate]);
+
+  // Build the flat, ordered entry list: recent → simulations → actions
+  const entries: PaletteEntry[] = useMemo(() => {
+    const q = query.trim();
+    const result: PaletteEntry[] = [];
+    const allSims = sims || [];
+    const toEntry = (s: SimEntry, section: string): PaletteEntry => ({
+      id: `${section}-${s.id}`,
+      section,
+      label: s.name,
+      sim: s,
+      action: () => navigateToSim(s.id),
+    });
+
+    if (!q) {
+      // Recent: last 5 opened, in recency order
+      const byId = new Map(allSims.map((s) => [s.id, s]));
+      const recentSims = recents
+        .map((id) => byId.get(id))
+        .filter((s): s is SimEntry => Boolean(s))
+        .slice(0, 5);
+      result.push(...recentSims.map((s) => toEntry(s, "recent")));
+
+      // Simulations: newest, excluding what's already shown
+      const recentIds = new Set(recentSims.map((s) => s.id));
+      result.push(
+        ...allSims
+          .filter((s) => !recentIds.has(s.id))
+          .slice(0, 6)
+          .map((s) => toEntry(s, "simulations"))
+      );
+
+      result.push(...actions);
+      return result;
+    }
+
+    // Query mode — fuzzy filter sims by name, substring/fuzzy filter actions
+    const scoredSims = allSims
+      .map((s) => ({ s, score: fuzzyScore(q, s.name) }))
+      .filter(({ score }) => score >= 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+    result.push(...scoredSims.map(({ s }) => toEntry(s, "simulations")));
+
+    result.push(
+      ...actions.filter(
+        (a) =>
+          fuzzyScore(q, a.label) >= 0 ||
+          (a.description || "").toLowerCase().includes(q.toLowerCase())
       )
-    : commands;
+    );
+    return result;
+  }, [query, sims, recents, actions, navigateToSim]);
 
-  const sections = Array.from(new Set(filtered.map((c) => c.section)));
+  const sections = Array.from(new Set(entries.map((e) => e.section)));
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -53,6 +204,8 @@ export function CommandPalette() {
         setOpen((prev) => !prev);
         setQuery("");
         setSelectedIndex(0);
+        // Mark the "use the command palette" activation step as done (Wave J).
+        try { localStorage.setItem("sylor-palette-used", "1"); } catch {}
       }
       if (e.key === "Escape") {
         setOpen(false);
@@ -74,20 +227,20 @@ export function CommandPalette() {
 
   const handleSelect = useCallback(
     (index: number) => {
-      const item = filtered[index];
+      const item = entries[index];
       if (item) {
         item.action();
         setOpen(false);
         setQuery("");
       }
     },
-    [filtered]
+    [entries]
   );
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setSelectedIndex((prev) => Math.min(prev + 1, filtered.length - 1));
+      setSelectedIndex((prev) => Math.min(prev + 1, entries.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setSelectedIndex((prev) => Math.max(prev - 1, 0));
@@ -120,15 +273,16 @@ export function CommandPalette() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Search commands..."
+              placeholder="Search simulations and commands..."
               className="flex-1 bg-transparent text-sm text-white/80 placeholder:text-white/20 outline-none"
             />
+            {simsLoading && <Loader2 className="w-3 h-3 animate-spin text-white/20 shrink-0" />}
             <kbd className="text-[10px] px-1.5 py-0.5 border border-white/10 text-white/20">esc</kbd>
           </div>
 
           {/* Results */}
           <div className="max-h-[320px] overflow-y-auto py-2">
-            {filtered.length === 0 ? (
+            {entries.length === 0 ? (
               <div className="px-4 py-8 text-center text-xs text-white/20">
                 No results found
               </div>
@@ -138,14 +292,14 @@ export function CommandPalette() {
                   <div className="px-4 py-1.5 text-[10px] text-white/20 uppercase tracking-wider">
                     {section}
                   </div>
-                  {filtered
-                    .filter((c) => c.section === section)
-                    .map((cmd) => {
+                  {entries
+                    .filter((e) => e.section === section)
+                    .map((entry) => {
                       flatIndex++;
                       const idx = flatIndex;
                       return (
                         <button
-                          key={cmd.id}
+                          key={entry.id}
                           onClick={() => handleSelect(idx)}
                           onMouseEnter={() => setSelectedIndex(idx)}
                           className={cn(
@@ -155,11 +309,22 @@ export function CommandPalette() {
                               : "text-white/50 hover:bg-white/[0.03]"
                           )}
                         >
-                          <cmd.icon className="w-4 h-4 shrink-0 text-white/30" />
+                          {entry.sim ? (
+                            <span className={cn("dot shrink-0", statusDotClass[entry.sim.status] || "dot-yellow")} />
+                          ) : entry.icon ? (
+                            <entry.icon className="w-4 h-4 shrink-0 text-white/30" />
+                          ) : null}
                           <div className="flex-1 min-w-0">
-                            <div className="text-xs font-medium">{cmd.label}</div>
-                            <div className="text-[10px] text-white/20 truncate">{cmd.description}</div>
+                            <div className="text-xs font-medium truncate">{entry.label}</div>
+                            {entry.description && (
+                              <div className="text-[10px] text-white/20 truncate">{entry.description}</div>
+                            )}
                           </div>
+                          {entry.sim?.success != null && (
+                            <span className="text-[10px] font-mono text-white/30 shrink-0">
+                              {Math.round(entry.sim.success)}%
+                            </span>
+                          )}
                           <ArrowRight className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-100" />
                         </button>
                       );

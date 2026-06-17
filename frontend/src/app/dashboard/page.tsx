@@ -8,15 +8,23 @@ import { useRouter } from "next/navigation";
 import {
   Plus, ArrowRight, TrendingUp, Activity, Zap, Clock, Loader2,
   BarChart2, Trash2, Copy, RotateCcw, Search, Filter,
+  Rocket, DollarSign, FlaskConical, Percent, X, Sparkles,
+  ArrowUpRight, ArrowDownRight, CheckCircle2, Circle, GitBranch,
+  Share2, Command, SlidersHorizontal,
 } from "lucide-react";
 import { onAuthChange } from "@/lib/firebase/auth";
-import { listSimulations } from "@/lib/api";
-import { formatCurrency } from "@/lib/utils";
+import { listSimulations, getDashboardDigest } from "@/lib/api";
+import { cn, formatCurrency } from "@/lib/utils";
+import { useDemoClaim } from "@/lib/use-demo-claim";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell,
 } from "recharts";
-import type { Simulation, SimulationCategory } from "@/types";
+import type { Simulation, SimulationCategory, DashboardDigest, DigestItem } from "@/types";
+
+const LAST_SEEN_KEY = "sylor-last-seen";
+const DIGEST_DISMISSED_KEY = "sylor-digest-dismissed";
+const ACTIVATION_DISMISSED_KEY = "sylor-activation-dismissed";
 
 const statusDot: Record<string, string> = {
   completed: "dot-green",
@@ -51,6 +59,16 @@ const categoryLabels: Record<string, string> = {
   custom: "custom",
 };
 
+// Empty-state question gallery — each card prefills the AI prompt on /simulations/new
+const questionGallery = [
+  { q: "will my saas hit $1m arr?", icon: Rocket, hint: "startup growth" },
+  { q: "is $29 or $49 the better price?", icon: DollarSign, hint: "pricing strategy" },
+  { q: "how risky is my portfolio?", icon: BarChart2, hint: "finance" },
+  { q: "will this molecule bind?", icon: FlaskConical, hint: "molecular dynamics" },
+  { q: "where is this trend heading?", icon: TrendingUp, hint: "trend forecasting" },
+  { q: "should i raise prices?", icon: Percent, hint: "revenue impact" },
+];
+
 function timeAgo(dateStr: string): string {
   const now = Date.now();
   const then = new Date(dateStr).getTime();
@@ -75,6 +93,17 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [claimedSimId, setClaimedSimId] = useState<string | null>(null);
+
+  // "Since you were away" digest strip
+  const [digest, setDigest] = useState<DashboardDigest | null>(null);
+  const [digestDismissed, setDigestDismissed] = useState(true);
+
+  // Getting-started activation checklist
+  const [activationDismissed, setActivationDismissed] = useState(true);
+  const [paletteUsed, setPaletteUsed] = useState(false);
+  const [comparedUsed, setComparedUsed] = useState(false);
+  const [sharedUsed, setSharedUsed] = useState(false);
 
   useEffect(() => {
     // Wait for Firebase to resolve auth state before doing anything
@@ -133,6 +162,13 @@ export default function DashboardPage() {
     }
   }, [userId]);
 
+  // Claim a zero-signup demo (from /demo, stashed in localStorage) once the user
+  // is signed in — moves it into their dashboard and refreshes the list.
+  useDemoClaim((simulationId) => {
+    setClaimedSimId(simulationId);
+    fetchSimulations();
+  });
+
   useEffect(() => {
     // Only start fetching once auth is resolved and we have a user
     if (!authReady || !userId) return;
@@ -142,6 +178,66 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [authReady, userId, fetchSimulations]);
 
+  // "Since you were away" digest — read the stored last-visit timestamp, fetch
+  // the digest once on load, render the strip if there are items, then stamp the
+  // current time so the next visit only surfaces what's newer.
+  useEffect(() => {
+    if (!authReady || !userId) return;
+    let lastSeenAt: string | undefined;
+    try {
+      lastSeenAt = localStorage.getItem(LAST_SEEN_KEY) || undefined;
+    } catch {
+      // localStorage unavailable — treat as a fresh visit
+    }
+    let cancelled = false;
+    let dismissedAt: string | null = null;
+    try { dismissedAt = localStorage.getItem(DIGEST_DISMISSED_KEY); } catch {}
+    getDashboardDigest(lastSeenAt)
+      .then((d) => {
+        if (cancelled) return;
+        setDigest(d);
+        const hasItems = (d.items?.length || 0) > 0;
+        // Honor a prior dismissal: stay hidden if the user dismissed the strip
+        // at or after the window we just queried (i.e. nothing newer has
+        // happened since they closed it). Brand-new users (no items) also
+        // never see the strip.
+        const dismissedThisWindow =
+          !!dismissedAt && !!lastSeenAt && dismissedAt >= lastSeenAt;
+        setDigestDismissed(!hasItems || dismissedThisWindow);
+        try { localStorage.setItem(LAST_SEEN_KEY, new Date().toISOString()); } catch {}
+      })
+      .catch(() => {
+        // non-critical — the strip just stays hidden
+      });
+    return () => { cancelled = true; };
+  }, [authReady, userId]);
+
+  // Activation checklist — read client-side completion flags from localStorage.
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(ACTIVATION_DISMISSED_KEY)) {
+        setActivationDismissed(true);
+        return;
+      }
+      setActivationDismissed(false);
+      setPaletteUsed(!!localStorage.getItem("sylor-palette-used"));
+      setComparedUsed(!!localStorage.getItem("sylor-compared"));
+      setSharedUsed(!!localStorage.getItem("sylor-shared"));
+    } catch {
+      setActivationDismissed(true);
+    }
+  }, []);
+
+  function dismissDigest() {
+    setDigestDismissed(true);
+    try { localStorage.setItem(DIGEST_DISMISSED_KEY, new Date().toISOString()); } catch {}
+  }
+
+  function dismissActivation() {
+    setActivationDismissed(true);
+    try { localStorage.setItem(ACTIVATION_DISMISSED_KEY, "1"); } catch {}
+  }
+
   // Computed stats
   const completedSims = simulations.filter((s) => s.status === "completed");
   const avgSuccess = completedSims.length > 0
@@ -149,6 +245,58 @@ export default function DashboardPage() {
     : 0;
   const totalRuns = simulations.reduce((acc, s) => acc + (s.runCount || 0), 0);
   const runningSims = simulations.filter((s) => s.status === "running").length;
+
+  // Activation checklist — 5 steps, completion inferred from the user's data
+  // where possible (sims, sweeps) and from localStorage event flags otherwise.
+  const hasCompletedSim = completedSims.length > 0;
+  const hasSweep = simulations.some((s) => (s.runCount || 0) >= 2);
+  const firstSimId = simulations[0]?.id;
+  const firstCompletedId = completedSims[0]?.id;
+  const activationItems = [
+    {
+      key: "sim",
+      label: "run a simulation",
+      done: hasCompletedSim,
+      href: hasCompletedSim && firstCompletedId ? `/simulations/${firstCompletedId}` : "/simulations/new",
+      icon: Zap,
+    },
+    {
+      key: "sweep",
+      label: "try a sweep",
+      done: hasSweep,
+      href: firstCompletedId ? `/simulations/${firstCompletedId}/sweep` : "/simulations/new",
+      icon: SlidersHorizontal,
+    },
+    {
+      key: "compare",
+      label: "compare two sims",
+      done: comparedUsed,
+      href: "/simulations/compare",
+      icon: GitBranch,
+    },
+    {
+      key: "share",
+      label: "share a result",
+      done: sharedUsed,
+      href: firstCompletedId ? `/simulations/${firstCompletedId}` : (firstSimId ? `/simulations/${firstSimId}` : "/simulations"),
+      icon: Share2,
+    },
+    {
+      key: "palette",
+      label: "use the command palette (⌘K)",
+      done: paletteUsed,
+      href: undefined as string | undefined,
+      icon: Command,
+    },
+  ];
+  const activationDone = activationItems.filter((i) => i.done).length;
+  const activationTotal = activationItems.length;
+  const activationComplete = activationDone >= activationTotal;
+  const showActivation = !activationDismissed && !loading && !activationComplete && simulations.length > 0;
+  // Progress ring geometry
+  const ringR = 16;
+  const ringC = 2 * Math.PI * ringR;
+  const ringPct = activationTotal > 0 ? activationDone / activationTotal : 0;
 
   // Category breakdown for chart
   const categoryData = Object.entries(
@@ -192,6 +340,66 @@ export default function DashboardPage() {
           new simulation
         </Link>
       </div>
+
+      {/* Claimed demo banner — shown after a zero-signup demo is saved on signup */}
+      {claimedSimId && (
+        <Link
+          href={`/simulations/${claimedSimId}`}
+          className="flex items-center gap-3 px-5 py-3 mb-8 bg-gradient-to-r from-violet-500/10 to-cyan-500/5 border border-violet-500/20 hover:border-violet-500/40 transition-colors group"
+        >
+          <Zap className="w-4 h-4 text-violet-400 shrink-0" />
+          <span className="text-xs text-white/70 flex-1">
+            your demo simulation was saved to your dashboard
+          </span>
+          <span className="text-xs text-violet-300 inline-flex items-center gap-1 group-hover:gap-2 transition-all">
+            open it <ArrowRight className="w-3 h-3" />
+          </span>
+        </Link>
+      )}
+
+      {/* "Since you were away" digest strip — hidden for brand-new users (no items) */}
+      {!digestDismissed && digest && (digest.items?.length || 0) > 0 && (
+        <div className="surface mb-8 overflow-hidden">
+          <div className="flex items-start gap-3 px-5 py-3.5 border-b border-white/[0.06]">
+            <Sparkles className="w-4 h-4 text-violet-400 shrink-0 mt-0.5" />
+            <p className="text-sm text-white/70 flex-1 leading-relaxed">{digest.headline}</p>
+            <button
+              onClick={dismissDigest}
+              aria-label="dismiss"
+              className="text-white/20 hover:text-white/50 transition-colors shrink-0"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div>
+            {digest.items.map((item: DigestItem, i: number) => {
+              const Wrapper: any = item.sim_id ? Link : "div";
+              const wrapperProps = item.sim_id ? { href: `/simulations/${item.sim_id}` } : {};
+              const tone =
+                item.type === "completed" ? "dot-green"
+                : item.type === "delta" ? "dot-blue"
+                : "dot-yellow";
+              return (
+                <Wrapper
+                  key={i}
+                  {...wrapperProps}
+                  className={cn(
+                    "flex items-center gap-3 px-5 py-2.5 text-xs transition-colors group",
+                    item.sim_id && "hover:bg-white/[0.025]",
+                    i < digest.items.length - 1 && "border-b border-white/[0.04]"
+                  )}
+                >
+                  <span className={cn("dot shrink-0", tone)} />
+                  <span className="text-white/60 flex-1 group-hover:text-white/80 transition-colors">{item.text}</span>
+                  {item.sim_id && (
+                    <ArrowRight className="w-3 h-3 text-white/20 group-hover:text-white/50 transition-colors shrink-0" />
+                  )}
+                </Wrapper>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-[var(--surface-border)] mb-8">
@@ -254,7 +462,7 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Quick start */}
+        {/* Quick start + getting-started activation checklist */}
         <div className="bg-[var(--page-bg)] p-5">
           <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">quick start</div>
           <div className="space-y-0.5">
@@ -276,17 +484,88 @@ export default function DashboardPage() {
               </Link>
             ))}
           </div>
+
+          {/* Activation checklist — hidden once all 5 are done or dismissed */}
+          {showActivation && (
+            <div className="mt-6 pt-5 border-t border-white/[0.06]">
+              <div className="flex items-center gap-3 mb-4">
+                {/* Progress ring */}
+                <div className="relative w-10 h-10 shrink-0">
+                  <svg className="w-10 h-10 -rotate-90" viewBox="0 0 40 40">
+                    <circle cx="20" cy="20" r={ringR} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="3" />
+                    <circle
+                      cx="20" cy="20" r={ringR} fill="none" stroke="#8b5cf6" strokeWidth="3"
+                      strokeLinecap="round"
+                      strokeDasharray={ringC}
+                      strokeDashoffset={ringC * (1 - ringPct)}
+                      className="transition-[stroke-dashoffset] duration-500"
+                    />
+                  </svg>
+                  <span className="absolute inset-0 flex items-center justify-center text-[10px] font-mono text-white/60">
+                    {activationDone}/{activationTotal}
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-white/60 font-medium">getting started</div>
+                  <div className="text-[10px] text-white/25">finish setting up your workspace</div>
+                </div>
+                <button
+                  onClick={dismissActivation}
+                  aria-label="dismiss"
+                  className="text-white/20 hover:text-white/50 transition-colors shrink-0"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <div className="space-y-0.5">
+                {activationItems.map((item) => {
+                  const Inner = (
+                    <>
+                      {item.done ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-green-400 shrink-0" />
+                      ) : (
+                        <Circle className="w-3.5 h-3.5 text-white/20 shrink-0" />
+                      )}
+                      <span className={cn("flex-1", item.done ? "text-white/30 line-through" : "text-white/50 group-hover:text-white/80")}>
+                        {item.label}
+                      </span>
+                      {!item.done && item.href && (
+                        <ArrowRight className="w-3 h-3 text-white/15 group-hover:text-white/50 transition-colors shrink-0" />
+                      )}
+                    </>
+                  );
+                  // Done items, or the palette step (no link), render as static rows.
+                  if (item.done || !item.href) {
+                    return (
+                      <div key={item.key} className="flex items-center gap-2.5 px-1 py-2 text-xs">
+                        {Inner}
+                      </div>
+                    );
+                  }
+                  return (
+                    <Link
+                      key={item.key}
+                      href={item.href}
+                      className="flex items-center gap-2.5 px-1 py-2 text-xs transition-colors group"
+                    >
+                      {Inner}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Simulations list */}
       <div className="surface">
-        <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.06]">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-5 py-3 border-b border-white/[0.06]">
           <span className="text-xs text-white/25 tracking-widest uppercase">
             {filterStatus === "all" ? "all simulations" : `${filterStatus} simulations`}
             {!loading && <span className="ml-2 text-white/15">({filtered.length})</span>}
           </span>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             {/* Search */}
             <div className="relative">
               <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-white/20" />
@@ -343,14 +622,26 @@ export default function DashboardPage() {
             <div className="px-5 py-16 text-center">
               {simulations.length === 0 ? (
                 <>
-                  <div className="text-white/20 mb-1 text-sm">no simulations yet</div>
-                  <div className="text-[10px] text-white/10 mb-6">create your first simulation to get started</div>
-                  <Link
-                    href="/simulations/new"
-                    className="btn-primary text-xs py-2 px-4 inline-flex items-center gap-1.5"
-                  >
-                    <Plus className="w-3 h-3" /> new simulation
-                  </Link>
+                  <div className="text-white/30 mb-1 text-sm">no simulations yet — ask a question</div>
+                  <div className="text-[10px] text-white/10 mb-6">pick one to prefill your first simulation, or write your own</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px bg-white/[0.05] max-w-3xl mx-auto text-left">
+                    {questionGallery.map((item) => (
+                      <Link
+                        key={item.q}
+                        href={`/simulations/new?question=${encodeURIComponent(item.q)}`}
+                        className="bg-[var(--page-bg)] p-4 hover:bg-white/[0.03] transition-colors group"
+                      >
+                        <item.icon className="w-4 h-4 text-white/25 group-hover:text-white/60 transition-colors mb-3" />
+                        <div className="text-xs font-medium text-white/60 group-hover:text-white transition-colors mb-1">
+                          {item.q}
+                        </div>
+                        <div className="text-[10px] text-white/20 flex items-center gap-1">
+                          {item.hint}
+                          <ArrowRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
                 </>
               ) : (
                 <>
@@ -364,7 +655,7 @@ export default function DashboardPage() {
               <Link
                 key={sim.id}
                 href={`/simulations/${sim.id}`}
-                className={`flex items-center gap-4 px-5 py-3.5 hover:bg-white/[0.025] transition-colors group ${
+                className={`flex items-center gap-3 sm:gap-4 px-4 sm:px-5 py-3.5 hover:bg-white/[0.025] transition-colors group ${
                   i < filtered.length - 1 ? "border-b border-white/[0.04]" : ""
                 }`}
               >
@@ -379,22 +670,23 @@ export default function DashboardPage() {
                   {statusLabel[sim.status] || sim.status}
                   {sim.status === "running" && <Loader2 className="w-2.5 h-2.5 animate-spin inline ml-1" />}
                 </span>
-                <span className="tag shrink-0">{categoryLabels[sim.category] || sim.category}</span>
+                {/* Category — hidden on the narrowest screens to avoid crowding */}
+                <span className="tag shrink-0 hidden sm:inline-flex">{categoryLabels[sim.category] || sim.category}</span>
                 {sim.results?.successProbability != null && (
-                  <div className="flex items-center gap-2 w-24 shrink-0">
-                    <div className="progress-bar flex-1">
+                  <div className="flex items-center gap-2 w-14 sm:w-24 shrink-0">
+                    <div className="progress-bar flex-1 hidden sm:block">
                       <div
                         className="progress-fill"
                         style={{ width: `${Math.round(sim.results.successProbability)}%` }}
                       />
                     </div>
-                    <span className="text-xs text-white/35 w-7 text-right">
+                    <span className="text-xs text-white/35 w-full sm:w-7 text-right">
                       {Math.round(sim.results.successProbability)}%
                     </span>
                   </div>
                 )}
                 {sim.runCount > 0 && (
-                  <span className="text-[10px] text-white/15 w-12 text-right shrink-0">
+                  <span className="text-[10px] text-white/15 w-12 text-right shrink-0 hidden sm:inline">
                     {sim.runCount} run{sim.runCount !== 1 ? "s" : ""}
                   </span>
                 )}

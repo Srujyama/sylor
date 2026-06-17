@@ -2,6 +2,8 @@
 User profile endpoints.
 Manages user profiles and preferences stored in Firestore.
 """
+import logging
+
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List
@@ -9,6 +11,8 @@ from datetime import datetime
 
 from app.middleware.auth import get_current_user
 from app.services.firebase_admin import get_document, update_document, delete_document, query_collection, get_db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -102,5 +106,5 @@ async def delete_my_account(user: dict = Depends(get_current_user)):
     # Delete profile
     try:
         await delete_document(PROFILES, user["uid"])
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to delete profile for user %s: %s", user["uid"], exc)

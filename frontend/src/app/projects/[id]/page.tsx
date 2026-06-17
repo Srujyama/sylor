@@ -1,5 +1,7 @@
 "use client";
 
+export const dynamic = 'force-dynamic';
+
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
@@ -9,8 +11,10 @@ import {
 } from "lucide-react";
 import {
   getProject, uploadDocuments, buildKnowledgeGraph, generateProfiles,
-  getTaskStatus, generateReport, chatWithReport,
+  getTaskStatus, generateReport, chatWithReport, runProjectSimulation,
 } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
+import { useRunTray } from "@/components/run-tray";
 import type { Project, TaskStatus as TaskStatusType } from "@/types";
 
 const PHASE_ICONS = {
@@ -25,10 +29,15 @@ const PHASE_ICONS = {
 export default function ProjectDetailPage() {
   const params = useParams();
   const projectId = params.id as string;
+  const { toast } = useToast();
+  const { trackExternalRun } = useRunTray();
 
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTask, setActiveTask] = useState<TaskStatusType | null>(null);
+  const [simNumRuns, setSimNumRuns] = useState(1000);
+  const [simStarting, setSimStarting] = useState(false);
+  const [runSimId, setRunSimId] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<Array<{ role: string; content: string }>>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -37,9 +46,11 @@ export default function ProjectDetailPage() {
     try {
       const data = await getProject(projectId);
       setProject(data);
-    } catch {}
+    } catch (err: any) {
+      toast({ title: "failed to load project", description: err.message || "check your connection and try again", variant: "error" });
+    }
     setLoading(false);
-  }, [projectId]);
+  }, [projectId, toast]);
 
   useEffect(() => {
     loadProject();
@@ -54,40 +65,81 @@ export default function ProjectDetailPage() {
         const task = await getTaskStatus(activeTask.task_id);
         setActiveTask(task);
         if (task.status === "completed" || task.status === "failed") {
+          if (task.status === "completed" && task.result?.simulation_id) {
+            setRunSimId(task.result.simulation_id as string);
+          }
+          if (task.status === "failed") {
+            toast({ title: "task failed", description: task.error || task.message || "something went wrong — try again", variant: "error" });
+          }
           await loadProject();
         }
-      } catch {}
+      } catch {
+        // transient poll errors are ignored — the next tick retries, and task
+        // failure itself is surfaced through the task status banner
+      }
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [activeTask, loadProject]);
+  }, [activeTask, loadProject, toast]);
 
   async function handleUpload(files: FileList) {
     try {
       await uploadDocuments(projectId, Array.from(files));
       await loadProject();
-    } catch {}
+    } catch (err: any) {
+      toast({ title: "failed to upload documents", description: err.message || "try again in a moment", variant: "error" });
+    }
   }
 
   async function handleBuildGraph() {
     try {
       const result = await buildKnowledgeGraph(projectId);
       setActiveTask({ task_id: result.task_id, task_type: "graph_build", status: "processing", progress: 0, message: "Starting...", result: null, error: null, created_at: "" });
-    } catch {}
+    } catch (err: any) {
+      toast({ title: "failed to start graph build", description: err.message || "try again in a moment", variant: "error" });
+    }
   }
 
   async function handleGenerateProfiles() {
     try {
       const result = await generateProfiles(projectId);
       setActiveTask({ task_id: result.task_id, task_type: "profile_generation", status: "processing", progress: 0, message: "Starting...", result: null, error: null, created_at: "" });
-    } catch {}
+    } catch (err: any) {
+      toast({ title: "failed to start profile generation", description: err.message || "try again in a moment", variant: "error" });
+    }
+  }
+
+  async function handleRunSimulation() {
+    setSimStarting(true);
+    try {
+      const result = await runProjectSimulation(projectId, { num_runs: simNumRuns });
+      setRunSimId(result.simulation_id);
+      // Surface the run in the global run tray. The project endpoint already
+      // started it as a background task, so track-only (no new stream).
+      trackExternalRun(result.simulation_id, project?.name || "project simulation");
+      setActiveTask({
+        task_id: result.task_id,
+        task_type: "simulation_run",
+        status: "processing",
+        progress: 0,
+        message: result.message || "starting simulation...",
+        result: null,
+        error: null,
+        created_at: "",
+      });
+    } catch (err: any) {
+      toast({ title: "failed to start simulation", description: err.message || "try again in a moment", variant: "error" });
+    }
+    setSimStarting(false);
   }
 
   async function handleGenerateReport() {
     try {
       const result = await generateReport(projectId);
       setActiveTask({ task_id: result.task_id, task_type: "report_generation", status: "processing", progress: 0, message: "Starting...", result: null, error: null, created_at: "" });
-    } catch {}
+    } catch (err: any) {
+      toast({ title: "failed to start report generation", description: err.message || "try again in a moment", variant: "error" });
+    }
   }
 
   async function handleChat() {
@@ -148,7 +200,9 @@ export default function ProjectDetailPage() {
     {
       key: "simulation",
       label: "Run Simulation",
-      description: "Execute Monte Carlo simulation with generated agents",
+      description: project.agent_profiles_count > 0
+        ? `${project.agent_profiles_count} agent personas from your knowledge graph will drive this simulation`
+        : "Execute Monte Carlo simulation with generated agents",
       completed: project.simulation_results_available,
       active: project.status === "profiles_generated" || project.status === "simulation_ready",
     },
@@ -199,6 +253,22 @@ export default function ProjectDetailPage() {
             />
           </div>
           <p className="text-[10px] text-white/25 mt-1">{activeTask.progress.toFixed(0)}% complete</p>
+        </div>
+      )}
+
+      {/* Simulation Run Success */}
+      {activeTask && activeTask.task_type === "simulation_run" && activeTask.status === "completed" && runSimId && (
+        <div className="mb-6 p-4 border border-emerald-500/20 rounded-lg bg-emerald-500/[0.04] flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <CheckCircle className="w-4 h-4 text-emerald-400" />
+            <div>
+              <p className="text-sm text-emerald-400">simulation complete</p>
+              <p className="text-[10px] text-white/25 mt-0.5">results are ready to explore</p>
+            </div>
+          </div>
+          <Link href={`/simulations/${runSimId}`} className="btn-primary text-[10px] py-1.5 px-3">
+            view results <ChevronRight className="w-3 h-3" />
+          </Link>
         </div>
       )}
 
@@ -256,8 +326,31 @@ export default function ProjectDetailPage() {
                   </button>
                 )}
                 {phase.key === "simulation" && phase.active && (
-                  <Link href="/simulations/new" className="btn-primary text-[10px] py-1.5 px-3">
-                    <Play className="w-3 h-3" /> Configure & Run
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={simNumRuns}
+                      onChange={(e) => setSimNumRuns(Number(e.target.value))}
+                      disabled={simStarting || activeTask?.status === "processing"}
+                      className="px-2 py-1.5 bg-white/[0.04] border border-white/[0.08] rounded text-[10px] text-white/60 focus:outline-none focus:border-white/20"
+                    >
+                      {[500, 1000, 2000, 5000].map((n) => (
+                        <option key={n} value={n} className="bg-zinc-900">
+                          {n.toLocaleString()} runs
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={handleRunSimulation}
+                      disabled={simStarting || activeTask?.status === "processing"}
+                      className="btn-primary text-[10px] py-1.5 px-3"
+                    >
+                      {simStarting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />} run simulation
+                    </button>
+                  </div>
+                )}
+                {phase.key === "simulation" && phase.completed && (project.simulation_id || runSimId) && (
+                  <Link href={`/simulations/${project.simulation_id || runSimId}`} className="text-xs text-white/40 hover:text-white/70 flex items-center gap-1">
+                    View <ChevronRight className="w-3 h-3" />
                   </Link>
                 )}
                 {phase.key === "report" && phase.active && !phase.completed && (

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Providers } from "@/components/providers";
 
@@ -7,11 +7,23 @@ export const metadata: Metadata = {
   description:
     "Simulate major decisions before making them. Build AI-powered simulations for business ideas, policies, and startup plans.",
   keywords: ["AI simulation", "business simulation", "startup planning", "decision making", "market simulation"],
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "Sylor",
+    statusBarStyle: "black-translucent",
+  },
   openGraph: {
     title: "Sylor — AI Simulation Platform",
     description: "Simulate major decisions before making them using multi-agent AI",
     type: "website",
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0a0a0a",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -9,17 +9,19 @@ import { getDocument, updateDocument } from "@/lib/firebase/firestore";
 import { useToast } from "@/components/ui/toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getApiUrl } from "@/lib/utils";
+import { getApiUrl, formatDate } from "@/lib/utils";
+import { getUserUsage } from "@/lib/api";
+import type { UserUsage } from "@/types";
 import {
-  User, Bell, Palette, Key, Shield, Download, Trash2, Check, Copy, Eye, EyeOff, Loader2, LogOut,
+  User, Bell, Palette, BarChart2, Shield, Download, Trash2, Check, Loader2, LogOut,
 } from "lucide-react";
 
-type SettingsTab = "account" | "preferences" | "api" | "notifications" | "danger";
+type SettingsTab = "account" | "preferences" | "usage" | "notifications" | "danger";
 
 const tabs: { id: SettingsTab; label: string; icon: typeof User }[] = [
   { id: "account", label: "account", icon: User },
   { id: "preferences", label: "preferences", icon: Palette },
-  { id: "api", label: "API & integrations", icon: Key },
+  { id: "usage", label: "usage & data", icon: BarChart2 },
   { id: "notifications", label: "notifications", icon: Bell },
   { id: "danger", label: "danger zone", icon: Shield },
 ];
@@ -43,9 +45,10 @@ export default function SettingsPage() {
   const [emailOnComplete, setEmailOnComplete] = useState(true);
   const [emailOnFail, setEmailOnFail] = useState(true);
   const [weeklyDigest, setWeeklyDigest] = useState(false);
-  const [showApiKey, setShowApiKey] = useState(false);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [usage, setUsage] = useState<UserUsage | null>(null);
+  const [usageLoading, setUsageLoading] = useState(true);
 
   useEffect(() => {
     const unsubscribe = onAuthChange(async (u) => {
@@ -53,6 +56,13 @@ export default function SettingsPage() {
         setUser(u);
         setDisplayName(u.displayName || "");
         setEmail(u.email || "");
+        // Load real usage stats from the API
+        getUserUsage()
+          .then((data) => setUsage(data))
+          .catch((err: any) => {
+            toast({ title: "Failed to load usage data", description: err.message, variant: "error" });
+          })
+          .finally(() => setUsageLoading(false));
         // Load saved preferences from Firestore
         const profile = await getDocument("profiles", u.uid);
         if (profile) {
@@ -123,11 +133,6 @@ export default function SettingsPage() {
     } finally {
       setExporting(false);
     }
-  }
-
-  function handleCopyApiKey() {
-    navigator.clipboard.writeText("sk-sylor-demo-xxxxxxxxxxxx");
-    toast({ title: "API key copied to clipboard" });
   }
 
   async function handleLogout() {
@@ -310,72 +315,66 @@ export default function SettingsPage() {
             </div>
           )}
 
-          {/* API */}
-          {activeTab === "api" && (
+          {/* Usage & data */}
+          {activeTab === "usage" && (
             <div className="space-y-6 animate-fade-in">
               <div>
-                <h2 className="text-sm font-semibold text-white mb-1">API & integrations</h2>
-                <p className="text-[11px] text-white/25">manage API keys and third-party integrations</p>
+                <h2 className="text-sm font-semibold text-white mb-1">usage & data</h2>
+                <p className="text-[11px] text-white/25">your simulation activity and data exports</p>
               </div>
 
               <div className="surface p-5 space-y-4">
-                <h3 className="text-xs font-semibold text-white/60 tracking-widest uppercase">API key</h3>
-                <p className="text-[11px] text-white/25">
-                  Use this key to access the Sylor API programmatically. Keep it secret.
-                </p>
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 bg-white/[0.02] border border-white/[0.06] px-3 py-2 font-mono text-xs text-white/40">
-                    {showApiKey ? "sk-sylor-demo-xxxxxxxxxxxx" : "sk-sylor-•••••••••••••"}
+                <h3 className="text-xs font-semibold text-white/60 tracking-widest uppercase">usage</h3>
+                {usageLoading ? (
+                  <div className="flex items-center justify-center py-6">
+                    <Loader2 className="w-4 h-4 animate-spin text-white/20" />
                   </div>
-                  <button
-                    onClick={() => setShowApiKey(!showApiKey)}
-                    className="p-2 border border-white/[0.06] text-white/30 hover:text-white/60 hover:bg-white/[0.03] transition-colors"
-                  >
-                    {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                  </button>
-                  <button
-                    onClick={handleCopyApiKey}
-                    className="p-2 border border-white/[0.06] text-white/30 hover:text-white/60 hover:bg-white/[0.03] transition-colors"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <button className="btn-ghost text-xs py-1.5 px-4">
-                  <Key className="w-3 h-3" /> regenerate key
-                </button>
-              </div>
-
-              <div className="surface p-5 space-y-4">
-                <h3 className="text-xs font-semibold text-white/60 tracking-widest uppercase">API usage</h3>
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
-                    <div className="text-xl font-bold text-white">0</div>
-                    <div className="text-[10px] text-white/25">requests today</div>
-                  </div>
-                  <div>
-                    <div className="text-xl font-bold text-white">0</div>
-                    <div className="text-[10px] text-white/25">this month</div>
-                  </div>
-                  <div>
-                    <div className="text-xl font-bold text-white">1,000</div>
-                    <div className="text-[10px] text-white/25">monthly limit</div>
-                  </div>
-                </div>
-                <div className="progress-bar">
-                  <div className="progress-fill" style={{ width: "0%" }} />
-                </div>
-              </div>
-
-              <div className="surface p-5 space-y-3">
-                <h3 className="text-xs font-semibold text-white/60 tracking-widest uppercase">webhooks</h3>
-                <p className="text-[11px] text-white/25">
-                  Get notified when simulations complete. Send results to Slack, Zapier, or your own endpoint.
-                </p>
-                <div>
-                  <Label className="text-xs text-white/50">Webhook URL</Label>
-                  <Input className="mt-1" placeholder="https://hooks.slack.com/..." />
-                </div>
-                <button onClick={handleSave} className="btn-ghost text-xs py-1.5 px-4">save webhook</button>
+                ) : usage ? (
+                  <>
+                    <div className="grid grid-cols-4 gap-4">
+                      <div>
+                        <div className="text-xl font-bold text-white">{usage.total_simulations}</div>
+                        <div className="text-[10px] text-white/25">total simulations</div>
+                      </div>
+                      <div>
+                        <div className="text-xl font-bold text-white">{usage.completed_simulations}</div>
+                        <div className="text-[10px] text-white/25">completed</div>
+                      </div>
+                      <div>
+                        <div className="text-xl font-bold text-white">{usage.total_runs.toLocaleString()}</div>
+                        <div className="text-[10px] text-white/25">monte carlo runs</div>
+                      </div>
+                      <div>
+                        <div className="text-xl font-bold text-white">{usage.avg_success_rate}%</div>
+                        <div className="text-[10px] text-white/25">avg success rate</div>
+                      </div>
+                    </div>
+                    <div className="progress-bar">
+                      <div
+                        className="progress-fill"
+                        style={{
+                          width: `${
+                            usage.total_simulations > 0
+                              ? Math.round((usage.completed_simulations / usage.total_simulations) * 100)
+                              : 0
+                          }%`,
+                        }}
+                      />
+                    </div>
+                    {usage.categories_used.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {usage.categories_used.map((c) => (
+                          <span key={c} className="tag text-[10px]">{c}</span>
+                        ))}
+                      </div>
+                    )}
+                    {usage.last_active && (
+                      <div className="text-[10px] text-white/20">last active {formatDate(usage.last_active)}</div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-[11px] text-white/25">usage data unavailable</div>
+                )}
               </div>
 
               <div className="surface p-5 space-y-3">

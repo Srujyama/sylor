@@ -294,10 +294,10 @@ class TestSimulationEngineRunSingle:
 class TestSimulationEngineFullRun:
     @pytest.mark.asyncio
     async def test_full_monte_carlo(self):
-        random.seed(42)
         config = _make_config(num_runs=20, time_horizon=6)
         engine = SimulationEngine(config)
-        results = await engine.run()
+        # Deterministic seeding replaces the old global random.seed(42).
+        results = await engine.run(base_seed=42)
 
         assert 0 <= results.success_probability <= 100
         assert results.confidence_interval[0] <= results.confidence_interval[1]
@@ -311,10 +311,9 @@ class TestSimulationEngineFullRun:
 
     @pytest.mark.asyncio
     async def test_variable_overrides(self):
-        random.seed(42)
         config = _make_config(num_runs=20, time_horizon=6)
         engine = SimulationEngine(config)
-        results = await engine.run(variable_overrides={"budget": 200000})
+        results = await engine.run(variable_overrides={"budget": 200000}, base_seed=42)
         # Should still produce valid results
         assert 0 <= results.success_probability <= 100
 
