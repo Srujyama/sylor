@@ -9,7 +9,6 @@ Improved with:
 - In-memory graph option when Zep is not configured
 - Firestore persistence with in-memory hot cache
 """
-import asyncio
 import json
 import logging
 import uuid
@@ -20,9 +19,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
-from app.config import settings
 from app.services.llm_client import LLMClient, llm_client
-from app.services.text_processor import TextProcessor, TextChunk
+from app.services.text_processor import TextProcessor
 
 logger = logging.getLogger(__name__)
 

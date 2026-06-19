@@ -7,14 +7,13 @@ and report generation into a single project workflow.
 All endpoints require authentication; projects and their tasks are scoped
 to the owning user.
 """
-import asyncio
 from typing import List, Optional, Dict
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks, Depends
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 from pydantic import BaseModel, Field
 
 from app.middleware.auth import get_current_user
 from app.middleware.rate_limit import require_expensive_rate_limit
-from app.services.simulation_orchestrator import orchestrator, ProjectStatus, Project
+from app.services.simulation_orchestrator import orchestrator, Project
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 

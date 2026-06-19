@@ -124,7 +124,7 @@ class LLMClient:
             max_tokens=max_tokens,
         )
 
-        return self._extract_json(response.text)
+        return self.extract_json(response.text)
 
     async def stream(
         self,
@@ -162,7 +162,7 @@ class LLMClient:
 
     # ── JSON Extraction Pipeline (adapted from MiroFish + Sylor context.py) ──
 
-    def _extract_json(self, text: str) -> Dict[str, Any]:
+    def extract_json(self, text: str) -> Dict[str, Any]:
         """
         Robust JSON extraction with multi-stage repair.
         Combines best patterns from MiroFish and Sylor's context.py.

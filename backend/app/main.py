@@ -17,7 +17,7 @@ import time
 from app.config import settings
 from app.routers import (
     simulations, templates, upload, context, projects, graphs, reports,
-    users, export, shares, analytics, public, demo, insights,
+    users, export, shares, analytics, public, demo, insights, composites,
 )
 from app.middleware.rate_limit import RateLimitMiddleware
 
@@ -54,6 +54,7 @@ app.include_router(analytics.router)  # Per-user analytics summary
 app.include_router(public.router)     # Public anonymized platform stats
 app.include_router(demo.router)       # Zero-signup public demo + claim
 app.include_router(insights.router)   # Narrative dashboard digest
+app.include_router(composites.router) # Cross-domain composite simulations (DAG of sub-sims)
 
 # ── New MiroFish-Inspired Routers ────────────────────────────────────────────
 app.include_router(projects.router)   # Unified project orchestration

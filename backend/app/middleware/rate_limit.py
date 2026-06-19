@@ -14,11 +14,10 @@ to avoid re-verifying on every request.
 import hashlib
 import logging
 import time
-import asyncio
 from collections import defaultdict
 from typing import Optional
 
-from fastapi import Request, HTTPException, Depends
+from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
@@ -51,6 +50,7 @@ EXPENSIVE_PREFIXES = (
     "/api/simulations/{sim_id}/branch",
     "/api/simulations/{sim_id}/copilot",
     "/api/simulations/{sim_id}/calibrate",
+    "/api/simulations/{sim_id}/hero-run",
     "/api/graphs/{graph_id}/intervene",
     "/api/demo/run",
     "/api/projects/{project_id}/build-graph",
@@ -69,7 +69,7 @@ _EXPENSIVE_SUFFIXES = {
     "chat", "build-graph", "generate-profiles", "generate-report",
     "run-simulation", "run/stream", "tornado", "whatif",
     "memo", "branch", "copilot", "diff", "explain",
-    "calibrate", "intervene",
+    "calibrate", "intervene", "optimize", "hero-run",
 }
 
 # ---------------------------------------------------------------------------

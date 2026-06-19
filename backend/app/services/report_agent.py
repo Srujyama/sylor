@@ -294,6 +294,7 @@ Design the report outline."""
             }
 
         except Exception:
+            logger.warning("Report outline generation failed; using fallback outline", exc_info=True)
             # Fallback outline (MiroFish pattern)
             return {
                 "title": f"{category_label} Simulation Analysis Report",
@@ -370,7 +371,7 @@ RULES:
             if response is None or not response.text:
                 # None response handling (MiroFish pattern)
                 if tool_call_count >= self.MIN_TOOL_CALLS:
-                    return f"*Section generation incomplete.*"
+                    return "*Section generation incomplete.*"
                 messages.append({"role": "assistant", "content": "I need to gather more data."})
                 messages.append({"role": "user", "content": "Please call a tool to gather information."})
                 continue

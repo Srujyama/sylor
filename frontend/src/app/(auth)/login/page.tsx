@@ -83,7 +83,7 @@ export default function LoginPage() {
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center">
               <Activity className="w-5 h-5 text-[#ffffff]" />
             </div>
-            <span className="text-xl font-bold gradient-text">SimWorld</span>
+            <span className="text-xl font-bold gradient-text">sylor</span>
           </div>
 
           <h1 className="text-2xl font-bold text-white mb-1">Welcome back</h1>

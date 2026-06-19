@@ -4,7 +4,6 @@ Supports JSON and CSV export of user simulation data.
 """
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
-from typing import Optional
 import io
 import csv
 import json

@@ -52,3 +52,7 @@ coverage/
 .cache/
 .claude/
 .vercel
+
+# TypeScript incremental build cache
+frontend/*.tsbuildinfo
+*.tsbuildinfo

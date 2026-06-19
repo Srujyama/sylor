@@ -233,7 +233,7 @@ async def analyze_context(body: CompanyContext, user: dict = Depends(get_current
             temperature=0.3,
             max_tokens=8000,  # Enough for 25 variables with full reasoning
         )
-        data = llm_client._extract_json(text)
+        data = llm_client.extract_json(text)
 
         return ContextAnalysisResponse(
             variables=data.get("variables", []),
@@ -317,7 +317,7 @@ RULES:
             temperature=0.3,
             max_tokens=8000,
         )
-        data = llm_client._extract_json(text)
+        data = llm_client.extract_json(text)
 
         return PromptAnalysisResponse(
             category=data.get("category", "custom"),

@@ -32,6 +32,7 @@ export function SliderWithInput({
   compact = false,
 }: SliderWithInputProps) {
   const [inputValue, setInputValue] = React.useState(String(value));
+  const inputId = React.useId();
 
   // Sync input when value changes externally (slider drag)
   React.useEffect(() => {
@@ -77,13 +78,15 @@ export function SliderWithInput({
       {/* Header row: label + input */}
       {(label || !compact) && (
         <div className="flex items-center justify-between mb-1">
-          {label && <span className="text-xs text-white/70 font-medium">{label}</span>}
+          {label && <label htmlFor={inputId} className="text-xs text-white/70 font-medium">{label}</label>}
           <div className="relative inline-flex items-center">
             {isPrefix && (
               <span className="absolute left-2 text-[10px] text-white/30 pointer-events-none select-none">{unit}</span>
             )}
             <input
+              id={inputId}
               type="text"
+              aria-label={label}
               value={inputValue}
               onChange={handleInputChange}
               onBlur={handleInputBlur}

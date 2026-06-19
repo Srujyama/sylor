@@ -6,7 +6,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime
 
 from app.middleware.auth import get_current_user

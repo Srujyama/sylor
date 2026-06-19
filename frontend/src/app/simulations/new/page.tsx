@@ -7,7 +7,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Slider } from "@/components/ui/slider";
 import { SliderWithInput } from "@/components/ui/slider-with-input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -16,7 +15,8 @@ import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/comp
 import {
   Rocket, DollarSign, BarChart2, Megaphone, ShoppingCart, Building2,
   ArrowRight, ArrowLeft, Loader2, Zap, TrendingUp, FlaskConical, LineChart,
-  Upload, FileSpreadsheet, X, Table, Sparkles, Check, AlertCircle, HelpCircle,
+  Upload, FileSpreadsheet, X, Sparkles, AlertCircle, HelpCircle,
+  Network,
 } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
@@ -89,13 +89,16 @@ export default function NewSimulationPage() {
   const [analysisError, setAnalysisError] = useState("");
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisStage, setAnalysisStage] = useState("");
-  const analysisTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Editable variables (populated by AI, user can tweak)
   const [variables, setVariables] = useState<AIAnalysisResponse["variables"]>([]);
   const [agents, setAgents] = useState<AIAnalysisResponse["agents"]>([]);
   const [numRuns, setNumRuns] = useState(1000);
   const [timeHorizon, setTimeHorizon] = useState(12);
+
+  // Network effects / contagion (experimental)
+  const [enableContagion, setEnableContagion] = useState(false);
+  const [contagionStrength, setContagionStrength] = useState(0.3);
 
   // Prompt mode
   const [inputMode, setInputMode] = useState<"prompt" | "form">("prompt");
@@ -441,6 +444,8 @@ export default function NewSimulationPage() {
         num_runs: numRuns,
         time_horizon: timeHorizon,
         company_context: { ...context, acquisitionChannels: selectedChannels },
+        enable_contagion: enableContagion,
+        ...(enableContagion ? { contagion_strength: contagionStrength } : {}),
       };
 
       const currentUser = getCurrentUser();
@@ -1143,6 +1148,60 @@ export default function NewSimulationPage() {
                 />
               </div>
             ))}
+          </div>
+
+          {/* Network effects (experimental) */}
+          <div className="surface mt-6">
+            <div className="px-5 py-3 border-b border-white/[0.06] flex items-center gap-2">
+              <Network className="w-3.5 h-3.5 text-white/30" />
+              <span className="text-xs text-white/25 tracking-widest uppercase">network effects</span>
+              <span className="tag text-[9px] ml-1">experimental</span>
+            </div>
+            <div className="p-5 space-y-4">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={enableContagion}
+                aria-label="let agents influence each other"
+                onClick={() => setEnableContagion((v) => !v)}
+                className="flex items-start gap-3 w-full text-left"
+              >
+                <div
+                  aria-hidden="true"
+                  className={cn(
+                    "mt-0.5 w-9 h-5 shrink-0 rounded-full border transition-colors relative",
+                    enableContagion ? "bg-violet-500/30 border-violet-400/50" : "bg-white/[0.04] border-white/15"
+                  )}
+                >
+                  <div
+                    className={cn(
+                      "absolute top-0.5 w-3.5 h-3.5 rounded-full transition-all",
+                      enableContagion ? "left-4 bg-violet-300" : "left-0.5 bg-white/40"
+                    )}
+                  />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-white/70 font-medium">let agents influence each other</div>
+                  <div className="text-[10px] text-white/25 leading-relaxed mt-0.5">
+                    churn and competitive pressure spread between agents, producing cascades. experimental.
+                  </div>
+                </div>
+              </button>
+
+              {enableContagion && (
+                <div className="pt-1">
+                  <SliderWithInput
+                    label="contagion strength"
+                    sublabel="how strongly one agent's state pulls its neighbors"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={contagionStrength}
+                    onChange={setContagionStrength}
+                  />
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex justify-between mt-8">

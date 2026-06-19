@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any, Literal
 from enum import Enum
 import uuid
@@ -127,6 +127,16 @@ class SimulationConfig(BaseModel):
     uploaded_data: Optional[Dict[str, List[float]]] = None  # column name → values
     company_context: Optional[Dict[str, Any]] = None  # user's real scenario context for AI insights
 
+    # ── Network-effects / contagion (OFF by default) ─────────────────
+    # When False (the default) the engine path is byte-for-byte identical to
+    # the legacy behavior: no influence matrix is built, no extra RNG is drawn
+    # and no agent state is nudged. When True, agents influence each other
+    # step-to-step through a bounded, decayed propagation pass (see
+    # SimulationEngine). ``contagion_strength`` (0..1) scales the nudge and is
+    # only consulted when ``enable_contagion`` is True.
+    enable_contagion: bool = False
+    contagion_strength: float = Field(ge=0, le=1, default=0.3)
+
 
 class TimelinePoint(BaseModel):
     month: int
@@ -182,6 +192,18 @@ class SimulationResults(BaseModel):
     converged: Optional[bool] = None
     # Overall confidence in the forecast: "high" | "medium" | "low".
     forecast_confidence: Optional[str] = None
+
+    # ── Network-effects / contagion metrics ──────────────────────────
+    # Populated only when the run had ``enable_contagion`` True; otherwise
+    # left at these defaults so legacy results stay valid.
+    #   contagion_enabled: whether inter-agent contagion ran for this result.
+    #   avg_cascade_events: mean per-path count of steps where the propagated
+    #     nudge exceeded the cascade threshold for >= 2 agents simultaneously.
+    #   max_contagion_reach: largest fraction (0..1) of agents simultaneously
+    #     affected in any single step across all paths.
+    contagion_enabled: bool = False
+    avg_cascade_events: float = 0.0
+    max_contagion_reach: float = 0.0
 
 
 class SimulationCreate(BaseModel):

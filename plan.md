@@ -136,7 +136,50 @@ Sylor = Monte Carlo engine × knowledge graphs × AI agent personas, on Next.js 
 - [x] Causal cycle-detection rewritten iteratively (a >1000-node causal chain no longer stack-overflows → 500)
 - [x] Fuzzy column-mapping default tightened (containment heuristic)
 
-*(Twelve waves + seven seam reviews, all verified green. **184 → 437 backend tests.** The result is a hardened, genuinely feature-rich product — the Now/Next/Later roadmap is essentially shipped.)*
+**Wave M/N — XL moonshot: cross-domain composite simulations** ✅ *(verified: 466 backend tests pass, build + strict typecheck green)*
+- [x] **Composite simulations** — chain sub-sims across domains into a DAG where one model's output drives another's inputs (e.g. biology binding-rate → business efficacy → finance runway). `POST /api/composites` (+ list/get/delete/run); new `/composites` section with a builder (assemble nodes + metric→variable links) and a DAG detail/run page.
+- [x] **Genuine per-path uncertainty propagation** — per-path links (`final_revenue`/`final_market_share`/`success_rate`) feed upstream path *i* into downstream path *i* under a shared seed (a good biology path feeds the matching business path), not mean-passed; aggregate links (`success_probability`/`avg_revenue`/`avg_market_share`) inject the upstream aggregate. Proven coupled: factor 0 → 0% downstream vs factor 50 → ~95% under the same seed.
+- [x] Engine refactor (non-breaking): `run_single_path()` + `aggregate_paths()` extracted so per-path-collected aggregation reproduces `run()` exactly; iterative Kahn topo sort (no recursion-limit risk); node cap 6, num_runs cap 5000.
+
+**Wave M/N seam review + fixes** ✅ *(7-agent review; per-path alignment + seed independence + engine refactor confirmed correct; 4 findings fixed + tested)*
+- [x] **Critical:** composite detail page crashed (`undefined.forEach`) — GET now lifts nodes/links/num_runs to the top level (+ defensive `?? []` guards) so the DAG/run page works
+- [x] **High:** non-finite link factor (NaN/inf) no longer crashes the run with a 500 — rejected at create (422) + `apply_transform` coerces non-finite results to 0
+- [x] Per-node outcome chart now plots `probability` (backend emits it) instead of always-zero `count`
+- [x] Duplicate-target link last-wins precedence documented *(low, reporting only)*
+
+**Wave O — Multi-objective Pareto optimizer** ✅ *(verified: 490 backend tests pass, build + strict typecheck green)*
+- [x] **`POST /api/simulations/{id}/optimize`** — turns Sylor from "simulate what I tell you" into "find me the best plan." Latin-hypercube search (scipy.stats.qmc, no new deps) over the sim's variable ranges → low-N seeded run per candidate (shared base_seed for fair comparison) → direction-aware Pareto frontier + knee-point "best balanced" recommendation.
+- [x] Objectives: maximize/minimize over success_probability / avg_revenue / avg_market_share / avg_breakeven_month (1-4 objectives). Budget 10-200 candidates, 20-500 runs each, expensive-tier.
+- [x] "optimize" tab with an objective builder, a Recharts Pareto scatter (frontier highlighted, knee-point starred "recommended", dominated dimmed), a frontier table, and "apply to what-if" to load any candidate's config.
+
+**Wave O seam review + fixes** ✅ *(review confirmed dominance/LHS/shared-seed math correct; 2 findings — same NaN root cause — fixed + tested)*
+- [x] Engine no longer returns NaN `avg_breakeven_month` when no run survives a period (`np.mean([])` → finite 0.0 sentinel) — a pre-existing latent bug the optimizer surfaced; was poisoning Pareto dominance + knee-point + serializing as invalid-JSON `NaN`
+- [x] Optimizer eval step sanitizes any non-finite metric to 0 (defense in depth); `knee_point` always returns a frontier member for a non-empty frontier
+
+**Wave P — Agent network-effects / contagion** ✅ *(verified: 505 backend tests pass, build + strict typecheck green)*
+- [x] **Agents now influence each other.** An influence matrix W (seeded from each persona's `influence_weight` + same-type affinity + weak global coupling) drives a per-step propagation pass: churn pressure spreads, competitive/market pressure cascades — producing emergent dynamics (tipping points, cascades) a single-agent model can't. Finally makes "multi-agent" mean something at the interaction level.
+- [x] **Opt-in + byte-identical when off.** New `enable_contagion` (default false) + `contagion_strength` (0..1, default 0.3) on SimulationConfig; when off the engine draws zero extra RNG and mutates no state, so all 492 prior tests (incl. exact-seed assertions) stay byte-identical. New `contagion_enabled` / `avg_cascade_events` / `max_contagion_reach` result fields.
+- [x] Wired into all four domains; nudge bounded (decay 0.7/hop, clamped) so extreme strength stays finite. Wizard toggle + strength slider ("experimental"); results show a network-effects card (cascade events + contagion reach) only when enabled.
+
+**Wave Q — LLM-driven agents in the loop (hero runs)** ✅ *(verified: 521 backend tests pass, build + strict typecheck green)*
+- [x] **`POST /api/simulations/{id}/hero-run`** — a single seeded "hero" path where, at a few KEY ticks, the most-influential agent makes an actual Claude decision grounded in its persona (instead of the formula), mapped to a bounded numeric nudge. The 1000-path Monte Carlo stays formula-based + fast; this is one illustrative LLM-in-the-loop path.
+- [x] HARD budget cap (`max_decisions` 1-12, default 6) on total LLM calls; every LLM-derived value finite-guarded (no NaN/inf/500); graceful formula fallback on LLM failure; one wrap-up narration with template fallback. New `hero_run.py` service. "hero run" tab with a decision timeline (agent, market snapshot, Claude's choice + rationale, applied effect), revenue chart, outcome, and narrative.
+- [x] Honest framing throughout: "one illustrative path, not a statistical result."
+
+**Polish pass** ✅ *(48-finding audit → triaged fix wave; 521 tests pass, build + typecheck green, Pydantic deprecation eliminated)*
+- [x] **Backend hygiene:** Pydantic V2 `SettingsConfigDict` (killed the suite's lone deprecation warning); background-task engine failures now log; `ai_insights` folded onto the `llm_client` singleton (last raw-Anthropic holdout); `context.py` uses a public `extract_json`; **22 duplicated ownership blocks in `simulations.py` collapsed into one `_load_owned_sim` helper**; dead imports/locals removed across ~10 modules; orchestrator re-import cleaned up.
+- [x] **Frontend hygiene:** removed unused `framer-motion` + `zustand` deps; a shared `mapSimulation()` replaced 4 duplicated snake→camel blocks; dead imports/locals swept; `any`→real types (dashboard `ElementType`, settings firebase `User`); dropped a dead `?user_id=` param; settings export/delete routed through `api.ts`.
+- [x] **Stale copy / docs:** "SimWorld"→"sylor" on the 3 auth pages; docs API reference corrected (real Firebase-token auth, real `sylor-api.fly.dev` host, dropped fake `sk-sylor-`/`100MB pro`/`user_id` claims) + pointer to live OpenAPI; changelog brought current (v0.5.0 → v3.0.0 with the shipped waves); README feature areas updated; dead `/privacy /terms /cookies` footer links removed.
+- [x] **Accessibility:** global `prefers-reduced-motion` CSS; slider labels; `role="switch"` on the contagion toggle; `role="img"`/`aria-label` on status dots + theater agents; `aria-hidden` on decorative icons.
+- [ ] *(deferred, noted)* modal focus-trap/ARIA-dialog (command palette, cheat sheet, export menu); causal-graph keyboard path; Recharts screen-reader table fallbacks; heading-case + breadcrumbs on graphs/reports/projects; real legal pages for the removed footer links.
+
+**Hero-run + polish seam review + fixes** ✅ *(7-agent review; the `_load_owned_sim` refactor + LLM consolidation + `mapSimulation` dedup all came back clean; 2 hero-run findings fixed + tested)*
+- [x] **Critical:** hero-run tab no longer crashes — `market_snapshot` (an object) was rendered as a raw React child; now formatted (+ types corrected)
+- [x] `max_decisions` is now a hard cap on LLM *calls*, not just successful decisions (a failing LLM could previously exceed the budget); regression test added
+
+*(Sixteen feature waves + a polish pass + thirteen seam reviews, all verified green. **184 → 522 backend tests.**)*
+
+> **Realtime decision (recorded):** when multiplayer scenario rooms get built, use **Firestore realtime** (onSnapshot for presence/room-state/live results; throttled presence writes for cursors) — no new infra, survives Fly scale-to-zero. The WebSocket-on-Fly path was considered and rejected for the autoscale/cost tradeoff.
 
 ---
 

@@ -3,10 +3,9 @@ AI-powered insights generation using Claude API.
 """
 import logging
 
-import anthropic
 from typing import Optional, Dict, Any
-from app.config import settings
 from app.models.simulation import SimulationConfig, SimulationResults
+from app.services.llm_client import llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +28,6 @@ async def generate_ai_insights(
     company_context: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """Generate rich AI insights from simulation results using Claude."""
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-
     variables_summary = "\n".join(
         [f"- {v.label}: {v.value}{v.unit or ''}" for v in config.variables]
     )
@@ -109,18 +106,10 @@ Format as JSON:
 }}"""
 
     try:
-        response = await client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1500,
+        return await llm_client.chat_json(
             messages=[{"role": "user", "content": prompt}],
+            max_tokens=1500,
         )
-        import json
-        text = response.content[0].text
-        # Extract JSON from response
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start >= 0 and end > start:
-            return json.loads(text[start:end])
     except Exception as e:
         logger.warning("AI insights call failed, using fallback insights: %s", e)
 

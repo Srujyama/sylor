@@ -1,5 +1,5 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi.responses import StreamingResponse
 from typing import List, Optional, AsyncGenerator, Dict
 import uuid
 import json
@@ -13,17 +13,19 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 from app.models.simulation import (
-    SimulationConfig, SimulationCreate, SimulationResponse,
-    RunSimulationRequest, SimulationStatus, AgentType,
+    SimulationConfig, SimulationCreate,
+    RunSimulationRequest, SimulationStatus,
     BranchSimulationRequest,
 )
-from app.services.simulation_engine import SimulationEngine, EventSink
+from app.services.simulation_engine import SimulationEngine
+from app.services.hero_run import HeroRunner, MIN_DECISIONS, MAX_DECISIONS, DEFAULT_DECISIONS
 from app.services.ai_insights import generate_ai_insights
 from app.services.calibration import calibrate as run_calibration
+from app.services import optimizer
 from app.services.llm_client import llm_client
 from app.services.run_history import record_run, RUNS_COLLECTION
 from app.services.firebase_admin import (
-    create_document, get_document, update_document, delete_document, query_collection, get_db,
+    get_document, update_document, delete_document, query_collection, get_db,
 )
 from app.middleware.auth import get_current_user
 from app.middleware.rate_limit import require_expensive_rate_limit
@@ -74,6 +76,17 @@ def _validate_num_runs(num_runs: Optional[int]) -> None:
 router = APIRouter(prefix="/api/simulations", tags=["simulations"])
 
 COLLECTION = "simulations"
+
+
+async def _load_owned_sim(sim_id: str, user: dict) -> dict:
+    """Fetch a simulation, enforcing existence (404) and ownership (403)."""
+    sim = await get_document(COLLECTION, sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    if sim.get("user_id") != user["uid"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return sim
+
 
 # Map AI-generated agent type strings to valid AgentType enum values
 _AGENT_TYPE_MAP = {
@@ -159,11 +172,7 @@ async def list_simulations(user: dict = Depends(get_current_user)):
 
 @router.get("/{sim_id}", response_model=dict)
 async def get_simulation(sim_id: str, user: dict = Depends(get_current_user)):
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
     return sim
 
 
@@ -176,11 +185,7 @@ async def run_simulation(
 ):
     _validate_num_runs(request.num_runs)
 
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
     if sim["status"] == SimulationStatus.RUNNING.value:
         raise HTTPException(status_code=409, detail="Simulation is already running")
 
@@ -226,11 +231,7 @@ async def run_simulation_stream(
     """
     _validate_num_runs(request.num_runs)
 
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
     if sim["status"] == SimulationStatus.RUNNING.value:
         raise HTTPException(status_code=409, detail="Simulation is already running")
 
@@ -301,6 +302,7 @@ async def run_simulation_stream(
                 }))
 
             except Exception as e:
+                logger.exception("Simulation %s failed", sim_id)
                 await update_document(COLLECTION, sim_id, {
                     "status": SimulationStatus.FAILED.value,
                     "error": str(e),
@@ -379,6 +381,7 @@ async def _execute_simulation(
         )
 
     except Exception as e:
+        logger.exception("Simulation %s failed", sim_id)
         await update_document(COLLECTION, sim_id, {
             "status": SimulationStatus.FAILED.value,
             "error": str(e),
@@ -388,11 +391,7 @@ async def _execute_simulation(
 
 @router.get("/{sim_id}/results")
 async def get_results(sim_id: str, user: dict = Depends(get_current_user)):
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
     if sim["status"] != SimulationStatus.COMPLETED.value:
         return {"status": sim["status"], "results": None}
     return {"status": sim["status"], "results": sim.get("results")}
@@ -421,11 +420,7 @@ async def get_replay(sim_id: str, user: dict = Depends(get_current_user)):
     event sink. The built replay is cached on the sim doc (``results.replay``)
     so repeat GETs do not recompute. 404 if the sim has no results yet.
     """
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
 
     results = sim.get("results")
     if not isinstance(results, dict):
@@ -494,11 +489,7 @@ async def get_transcript(sim_id: str, user: dict = Depends(get_current_user)):
     sim doc (``results.transcript``). Falls back to a templated narrative if the
     LLM fails (still 200). 404 if no results.
     """
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
 
     results = sim.get("results")
     if not isinstance(results, dict):
@@ -643,11 +634,7 @@ async def copilot_suggestions(sim_id: str, user: dict = Depends(get_current_user
     Feeds the results summary, variable list, and run history to the LLM. Falls
     back to 2-3 heuristic suggestions when the LLM fails. Owner-scoped.
     """
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
 
     config = SimulationConfig(**sim["config"])
     results = sim.get("results") if isinstance(sim.get("results"), dict) else None
@@ -731,11 +718,7 @@ async def copilot_suggestions(sim_id: str, user: dict = Depends(get_current_user
 
 @router.post("/{sim_id}/duplicate")
 async def duplicate_simulation(sim_id: str, user: dict = Depends(get_current_user)):
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
 
     new_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
@@ -774,11 +757,7 @@ async def branch_simulation(
     """
     _validate_num_runs(request.num_runs)
 
-    parent = await get_document(COLLECTION, sim_id)
-    if not parent:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if parent.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    parent = await _load_owned_sim(sim_id, user)
 
     # Validate overrides against the parent's config, then bake them into the
     # child's config so the branch carries its scenario as a first-class sim.
@@ -831,11 +810,7 @@ async def branch_simulation(
 @router.get("/{sim_id}/tree")
 async def get_simulation_tree(sim_id: str, user: dict = Depends(get_current_user)):
     """Return every owner-scoped simulation sharing this sim's root_id."""
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
 
     root_id = sim.get("root_id") or sim.get("id") or sim_id
     family = await query_collection(
@@ -873,11 +848,7 @@ async def get_simulation_tree(sim_id: str, user: dict = Depends(get_current_user
 
 @router.delete("/{sim_id}", status_code=204)
 async def delete_simulation(sim_id: str, user: dict = Depends(get_current_user)):
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    await _load_owned_sim(sim_id, user)
     await delete_document(COLLECTION, sim_id)
 
 
@@ -907,11 +878,7 @@ async def sweep_variable(
     request: SweepRequest,
     user: dict = Depends(get_current_user),
 ):
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
 
     config = SimulationConfig(**sim["config"])
 
@@ -971,11 +938,7 @@ async def tornado_analysis(
     the variable's min/max — with the SAME base_seed so differences are signal,
     not Monte Carlo noise. Runs sequentially to bound memory.
     """
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
 
     config = SimulationConfig(**sim["config"])
     numeric_vars = [
@@ -1070,11 +1033,7 @@ async def whatif_analysis(
     Baseline and what-if runs share the SAME base_seed so the deltas are
     signal rather than Monte Carlo noise.
     """
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
 
     config = SimulationConfig(**sim["config"])
     variables_desc = [
@@ -1274,11 +1233,7 @@ async def calibrate_simulation(
     """
     _validate_observed_series(request.observed)
 
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
 
     config = SimulationConfig(**sim["config"])
     config_variables = [
@@ -1362,11 +1317,7 @@ async def apply_calibration(
     and bumps ``updated_at``. Status is left as-is. Owner-scoped. Returns
     {simulation_id}.
     """
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
 
     config = SimulationConfig(**sim["config"])
     valid_names = {v.name for v in config.variables}
@@ -1424,11 +1375,7 @@ async def counterfactual_diff(
     the set-difference of risk-factor names, plus a one-paragraph LLM
     explanation (deterministic template fallback). Owner-scoped, expensive.
     """
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
 
     config = SimulationConfig(**sim["config"])
     overrides = {k: float(v) for k, v in request.variable_overrides.items()}
@@ -1631,11 +1578,7 @@ async def explain_path(
             detail=f"percentile must be one of {sorted(_EXPLAIN_PERCENTILES)}.",
         )
 
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    sim = await _load_owned_sim(sim_id, user)
 
     results = sim.get("results")
     if not isinstance(results, dict):
@@ -1730,16 +1673,137 @@ async def explain_path(
     }
 
 
+# ── Hero run (one LLM-in-the-loop explanatory path) ──────────────────────────
+
+class HeroRunRequest(BaseModel):
+    """Body for POST /{sim_id}/hero-run.
+
+    ``max_decisions`` is the HARD cap on total LLM decision calls across the whole
+    run (cost bound). ``base_seed`` reuses the sim's recorded base_seed when
+    omitted (else a fresh one), and is echoed in the response.
+    """
+    max_decisions: int = Field(default=DEFAULT_DECISIONS, ge=MIN_DECISIONS, le=MAX_DECISIONS)
+    base_seed: Optional[int] = None
+
+
+_HERO_NARRATIVE_SYSTEM = (
+    "You are a narrator wrapping up a single 'hero run' of a multi-agent business "
+    "simulation: one illustrative path where a few influential agents made real "
+    "LLM-driven decisions (the rest of the path is formula-driven and seeded). "
+    "Given the per-step decisions and the final outcome, write ONE short paragraph "
+    "(3-5 sentences) describing the arc and the role those decisions played. Be "
+    "honest that this is one illustrative path, not a statistical result. Respond "
+    'with JSON of the shape {"narrative": "<one paragraph>"}.'
+)
+
+
+def _hero_fallback_narrative(payload: dict) -> str:
+    """Deterministic templated wrap-up when the LLM is unavailable."""
+    outcome = payload.get("outcome", {})
+    decisions = payload.get("decisions", [])
+    time_unit = payload.get("time_unit", "month")
+    n_steps = len(payload.get("timeline", []))
+    final_rev = float(outcome.get("final_revenue", 0.0))
+    verb = "reached its target" if outcome.get("success") else "fell short of target"
+    if decisions:
+        moves = "; ".join(
+            f"{d.get('agent_name', d.get('agent_type', 'agent'))} chose to "
+            f"{str(d.get('decision', 'hold')).replace('_', ' ')} at {time_unit} {d.get('t')}"
+            for d in decisions[:4]
+        )
+        body = f"Across {n_steps} {time_unit}s, key moves: {moves}. "
+    else:
+        body = (
+            f"Across {n_steps} {time_unit}s no LLM decisions were applied "
+            "(budget unused or the model was unavailable), so the path ran on the "
+            "formula alone. "
+        )
+    return (
+        body
+        + f"The path {verb} with final revenue {final_rev:,.0f}. "
+        "This is one illustrative LLM-in-the-loop path, not a statistical result — "
+        "the formula parts are seeded and reproducible, but the LLM decisions are not."
+    )
+
+
+@router.post("/{sim_id}/hero-run", dependencies=[Depends(require_expensive_rate_limit)])
+async def hero_run(
+    sim_id: str,
+    request: HeroRunRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Run ONE LLM-in-the-loop 'hero' path for a simulation.
+
+    A hero run is a SINGLE deterministic-seed path where, at a few KEY decision
+    ticks (and only while budget remains), the most influential agent makes an
+    actual Claude decision grounded in its persona + the compact market snapshot,
+    instead of the hardcoded formula. Every other tick uses the normal formula,
+    so the path stays seeded APART FROM the handful of LLM decisions.
+
+    This is NOT the 1000-path Monte Carlo (which stays formula-based and fast) —
+    it is one illustrative, budget-capped explanatory path. ``max_decisions``
+    (1-12) HARD-caps total LLM decision calls. Each LLM call is wrapped so a
+    failure falls back to the formula (never a 500, never NaN/inf). ONE extra LLM
+    call narrates the wrap-up (deterministic template fallback). Owner-scoped,
+    expensive. 404 missing, 403 not owner, 409 if the sim has no config.
+    """
+    sim = await _load_owned_sim(sim_id, user)
+
+    raw_config = sim.get("config")
+    if not isinstance(raw_config, dict) or not raw_config:
+        raise HTTPException(status_code=409, detail="Simulation has no config to run")
+    try:
+        config = SimulationConfig(**raw_config)
+    except Exception as exc:
+        logger.warning("Hero-run config invalid for simulation %s: %s", sim_id, exc)
+        raise HTTPException(status_code=409, detail="Simulation has no config to run")
+
+    base_seed = int(request.base_seed) if request.base_seed is not None else _resolve_base_seed(sim)
+
+    runner = HeroRunner(config, llm_client)
+    payload = await runner.run(base_seed=base_seed, max_decisions=request.max_decisions)
+
+    # ONE narration call to wrap up the path (deterministic template fallback).
+    narrative = _hero_fallback_narrative(payload)
+    try:
+        parsed = await llm_client.chat_json(
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Simulation: {sim.get('name', 'Simulation')} "
+                    f"(category {sim.get('category')}, time unit {payload.get('time_unit')}).\n"
+                    f"Outcome: {json.dumps(payload.get('outcome'))}.\n"
+                    f"Decisions made ({payload.get('decisions_used')} of "
+                    f"{payload.get('decisions_budget')} budget):\n"
+                    f"{json.dumps(payload.get('decisions'))}"
+                ),
+            }],
+            system=_HERO_NARRATIVE_SYSTEM,
+            temperature=0.5,
+            max_tokens=600,
+        )
+        narr = parsed.get("narrative") if isinstance(parsed, dict) else None
+        if isinstance(narr, str) and narr.strip():
+            narrative = narr.strip()
+    except Exception as exc:
+        logger.warning("Hero-run narrative generation failed for simulation %s: %s", sim_id, exc)
+
+    logger.info(
+        "Hero run for simulation %s: %d/%d LLM decisions used over %d steps",
+        sim_id, payload.get("decisions_used", 0), payload.get("decisions_budget", 0),
+        len(payload.get("timeline", [])),
+    )
+
+    payload["narrative"] = narrative
+    return payload
+
+
 # ── Run history ──────────────────────────────────────────────────────────────
 
 @router.get("/{sim_id}/runs")
 async def list_simulation_runs(sim_id: str, user: dict = Depends(get_current_user)):
     """Run history for a simulation — newest first, capped at 50."""
-    sim = await get_document(COLLECTION, sim_id)
-    if not sim:
-        raise HTTPException(status_code=404, detail="Simulation not found")
-    if sim.get("user_id") != user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    await _load_owned_sim(sim_id, user)
 
     runs = await query_collection(RUNS_COLLECTION, [("simulation_id", "==", sim_id)])
     runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)
@@ -1827,3 +1891,174 @@ async def import_simulation(payload: SimulationImport, user: dict = Depends(get_
     db = get_db()
     await db.collection(COLLECTION).document(sim_id).set(sim)
     return sim
+
+
+# ── Multi-objective Pareto optimizer ─────────────────────────────────────────
+
+class OptimizeObjective(BaseModel):
+    metric: str
+    direction: str
+
+
+class OptimizeRequest(BaseModel):
+    objectives: List[OptimizeObjective] = Field(default_factory=list)
+    variables: Optional[List[str]] = None
+    budget: int = Field(default=60, ge=10, le=200)
+    runs_per_candidate: int = Field(default=100, ge=20, le=500)
+
+
+# Cap on simultaneous candidate evaluations to bound memory/CPU.
+_OPTIMIZE_MAX_CONCURRENCY = 8
+
+
+@router.post("/{sim_id}/optimize", dependencies=[Depends(require_expensive_rate_limit)])
+async def optimize_simulation(
+    sim_id: str,
+    request: OptimizeRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Multi-objective Pareto optimizer over the simulation's variable space.
+
+    Draws ``budget`` candidate configurations via seeded Latin-Hypercube sampling
+    of the chosen variables' [min, max] boxes, evaluates each with a LOW number of
+    Monte Carlo runs under a SHARED base_seed (common random numbers, so the
+    comparison between candidates is signal not noise), then computes the
+    direction-aware Pareto-non-dominated frontier and a knee point
+    (closest-to-ideal on normalized objectives).
+
+    Honest framing: this is an APPROXIMATION — a budgeted LHS sample evaluated at
+    low N. Validate frontier members / the knee point with a full run. Owner-scoped,
+    expensive.
+    """
+    # ── Validate objectives ──────────────────────────────────────────────
+    objectives = request.objectives
+    if not objectives or len(objectives) > 4:
+        raise HTTPException(
+            status_code=422,
+            detail="objectives must contain between 1 and 4 entries.",
+        )
+    for obj in objectives:
+        if obj.metric not in optimizer.VALID_OBJECTIVE_METRICS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid objective metric '{obj.metric}'. "
+                       f"Valid metrics: {sorted(optimizer.VALID_OBJECTIVE_METRICS)}",
+            )
+        if obj.direction not in optimizer.VALID_DIRECTIONS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid direction '{obj.direction}'. "
+                       f"Valid directions: {sorted(optimizer.VALID_DIRECTIONS)}",
+            )
+
+    sim = await _load_owned_sim(sim_id, user)
+
+    config = SimulationConfig(**sim["config"])
+
+    # ── Resolve searchable variables (chosen, else all numeric w/ both bounds) ──
+    def _searchable(v) -> bool:
+        return (
+            v.type in _NUMERIC_VARIABLE_TYPES
+            and v.min is not None
+            and v.max is not None
+            and v.max > v.min
+        )
+
+    by_name = {v.name: v for v in config.variables}
+    if request.variables:
+        invalid = [n for n in request.variables if n not in by_name]
+        if invalid:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown variable(s): {sorted(invalid)}. "
+                       f"Valid variables: {sorted(by_name)}",
+            )
+        searchable_vars = [by_name[n] for n in request.variables if _searchable(by_name[n])]
+    else:
+        searchable_vars = [v for v in config.variables if _searchable(v)]
+
+    if not searchable_vars:
+        raise HTTPException(
+            status_code=422,
+            detail="No searchable variables (numeric with both min and max bounds).",
+        )
+
+    # ── Shared base_seed for fair (common-random-number) comparison ──────
+    base_seed = _resolve_base_seed(sim)
+    budget = request.budget
+    runs = request.runs_per_candidate
+
+    # ── Draw candidates via Latin-Hypercube ──────────────────────────────
+    overrides_list = optimizer.latin_hypercube(searchable_vars, budget, base_seed)
+
+    engine = SimulationEngine(config)
+
+    def _finite(x: float) -> float:
+        # Any non-finite metric (NaN/inf) would poison Pareto dominance + the
+        # knee-point math and serialize as invalid-JSON `NaN`. Coerce to 0.
+        xf = float(x)
+        return xf if math.isfinite(xf) else 0.0
+
+    async def _evaluate(overrides: Dict[str, float]):
+        results = await engine.run(
+            num_runs=runs, variable_overrides=overrides, base_seed=base_seed
+        )
+        return {
+            "success_probability": _finite(results.success_probability),
+            "avg_revenue": _finite(results.avg_revenue),
+            "avg_market_share": _finite(results.avg_market_share),
+            "avg_breakeven_month": _finite(results.avg_breakeven_month),
+        }
+
+    # Bounded concurrency: evaluate candidates in modest batches so we never
+    # spawn more than _OPTIMIZE_MAX_CONCURRENCY engine runs at once.
+    metrics_list: List[Dict[str, float]] = []
+    for i in range(0, len(overrides_list), _OPTIMIZE_MAX_CONCURRENCY):
+        chunk = overrides_list[i:i + _OPTIMIZE_MAX_CONCURRENCY]
+        chunk_metrics = await asyncio.gather(*[_evaluate(o) for o in chunk])
+        metrics_list.extend(chunk_metrics)
+
+    candidates = []
+    for idx, (overrides, metrics) in enumerate(zip(overrides_list, metrics_list)):
+        candidates.append({
+            "id": idx,
+            "overrides": {k: round(float(v), 6) for k, v in overrides.items()},
+            "metrics": {k: round(float(val), 6) for k, val in metrics.items()},
+            "on_frontier": False,
+        })
+
+    objectives_payload = [{"metric": o.metric, "direction": o.direction} for o in objectives]
+
+    frontier_ids = optimizer.pareto_frontier(candidates, objectives_payload)
+    for cand in candidates:
+        cand["on_frontier"] = cand["id"] in frontier_ids
+
+    frontier_cands = [c for c in candidates if c["id"] in frontier_ids]
+    knee = optimizer.knee_point(frontier_cands, objectives_payload)
+
+    # Frontier ids sorted by the FIRST objective (direction-aware).
+    first = objectives_payload[0]
+    frontier_sorted = sorted(
+        frontier_cands,
+        key=lambda c: c["metrics"].get(first["metric"], 0.0),
+        reverse=(first["direction"] == "maximize"),
+    )
+    frontier = [c["id"] for c in frontier_sorted]
+
+    logger.info(
+        "Optimize for simulation %s: %d vars, %d candidates, %d runs each, %d on frontier",
+        sim_id, len(searchable_vars), len(candidates), runs, len(frontier),
+    )
+
+    return {
+        "base_seed": base_seed,
+        "searched_variables": [
+            {"name": v.name, "label": v.label, "min": v.min, "max": v.max}
+            for v in searchable_vars
+        ],
+        "objectives": objectives_payload,
+        "candidates": candidates,
+        "frontier": frontier,
+        "knee_point": knee,
+        "evaluated": len(candidates),
+    }

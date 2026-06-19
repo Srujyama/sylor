@@ -82,7 +82,7 @@ export default function SweepPage({ params }: { params: { id: string } }) {
       const data = await getSimulation(params.id);
       setSimulation(data);
 
-      const vars: Variable[] = data?.config?.variables || [];
+      const vars: Variable[] = (data?.config?.variables || []) as unknown as Variable[];
       if (vars.length > 0) {
         // Copilot "sweep" suggestions prefill via ?variable=&min=&max=.
         const qVar = searchParams.get("variable");

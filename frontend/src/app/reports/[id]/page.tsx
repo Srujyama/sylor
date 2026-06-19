@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, FileText, Download, MessageSquare, Loader2, Copy, Check } from "lucide-react";
+import { ArrowLeft, Download, MessageSquare, Loader2, Copy, Check } from "lucide-react";
 import { getReport, getReportProgress, chatWithReportDirect } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import type { Report, ReportProgress } from "@/types";

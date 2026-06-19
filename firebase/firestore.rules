@@ -84,6 +84,16 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ── composites ──────────────────────────────────────────────
+    // Cross-domain composite simulations (a DAG of sub-sims). Written by
+    // the backend Admin SDK ({ user_id, created_at, ... }); client reads own.
+    match /composites/{compositeId} {
+      allow read:   if isSignedIn() && resource.data.user_id == request.auth.uid;
+      allow create: if false; // Admin SDK only
+      allow update: if false;
+      allow delete: if false;
+    }
+
     // ── tasks ───────────────────────────────────────────────────
     // Written by backend Admin SDK ({ user_id, created_at, ... });
     // client can read own tasks

@@ -36,6 +36,9 @@ export interface SimulationConfig {
   templateId?: string;
   uploadedData?: Record<string, number[]>; // column name → values
   companyContext?: Record<string, any>; // user's real scenario context
+  // Network effects / contagion (experimental) — let agents influence each other.
+  enable_contagion?: boolean;
+  contagion_strength?: number; // 0..1, default 0.3
 }
 
 export interface SimulationRun {
@@ -67,6 +70,10 @@ export interface SimulationResults {
   competitorReactions: string[];
   topScenario: SimulationRun;
   worstScenario: SimulationRun;
+  // Network effects / contagion (experimental) — present when contagion was on.
+  contagion_enabled?: boolean;
+  avg_cascade_events?: number;
+  max_contagion_reach?: number; // 0..1
 }
 
 export interface RiskFactor {
@@ -109,6 +116,41 @@ export interface Simulation {
   parent_id?: string | null;
   root_id?: string;
   branch_label?: string | null;
+}
+
+// Simulation shape as returned by the API (snake_case). The results sub-object
+// carries snake_case metric fields; mapSimulation() in lib/api.ts normalizes it
+// into the camelCase Simulation used across the UI.
+export interface ApiSimulationResults {
+  success_probability?: number;
+  confidence_interval?: [number, number];
+  avg_revenue?: number;
+  avg_market_share?: number;
+  avg_breakeven_month?: number;
+  risk_factors?: RiskFactor[];
+  key_insights?: string[];
+  outcome_distribution?: OutcomeDistribution[];
+  timeline_aggregated?: AggregatedTimeline[];
+  competitor_reactions?: string[];
+  [key: string]: any;
+}
+
+export interface ApiSimulation {
+  id: string;
+  user_id: string;
+  name: string;
+  description: string;
+  category: SimulationCategory;
+  config: SimulationConfig;
+  status: SimulationStatus;
+  results?: ApiSimulationResults | null;
+  created_at: string;
+  updated_at: string;
+  run_count: number;
+  parent_id?: string | null;
+  root_id?: string;
+  branch_label?: string | null;
+  error?: string | null;
 }
 
 export interface Template {
@@ -816,6 +858,103 @@ export interface CausalGraph {
   cycle_note?: string; // present if cycles were detected + broken
 }
 
+// --- Cross-Domain Composite Simulations ---
+// A composite is a DAG of sub-simulations linked by metric->variable edges.
+
+// Metrics a link can pull from an upstream node. final_*/success_rate are
+// per-path (true uncertainty propagation); the rest are aggregate (mean-passed).
+export type CompositeFromMetric =
+  | "success_probability"
+  | "avg_revenue"
+  | "avg_market_share"
+  | "final_revenue"
+  | "final_market_share"
+  | "success_rate";
+
+export type CompositeTransform = "linear" | "scale" | "normalize" | "direct";
+
+// One sub-simulation in the composite. config is a full sub-sim config — the
+// same shape POST /api/simulations accepts under .config (snake_case).
+export interface CompositeNode {
+  node_id: string; // stable id within the composite (e.g. "biology", "business")
+  label: string;
+  config: Record<string, any>;
+}
+
+// A directed edge: upstream metric feeds a downstream variable, transformed.
+export interface CompositeLink {
+  from_node: string;            // upstream node_id
+  from_metric: CompositeFromMetric;
+  to_node: string;              // downstream node_id
+  to_variable: string;          // a variable .name in the downstream node's config
+  transform: CompositeTransform;
+  factor?: number;              // multiplier for linear/scale (default 1.0)
+}
+
+// Body for POST /api/composites
+export interface CompositeConfig {
+  name: string;
+  num_runs: number;             // 10-5000, default 1000
+  nodes: CompositeNode[];
+  links: CompositeLink[];
+}
+
+// Entry from GET /api/composites
+export interface CompositeListItem {
+  composite_id: string;
+  name: string;
+  status: string;
+  node_count: number;
+  created_at: string;
+}
+
+// One link as applied during a run (with the realized mean injected value)
+export interface AppliedLink {
+  from_node: string;
+  from_metric: CompositeFromMetric;
+  to_node: string;
+  to_variable: string;
+  transform: CompositeTransform;
+  mean_injected_value: number;
+}
+
+// One sub-sim's result inside a composite run. results is SimulationResults-shaped
+// (snake_case, the same shape GET /results returns under .results).
+export interface CompositeNodeResult {
+  node_id: string;
+  label: string;
+  category: string;
+  results: Record<string, any>;
+}
+
+// Response from POST /api/composites/{id}/run
+export interface CompositeRunResult {
+  composite_id: string;
+  order: string[];              // topological execution order of node_ids
+  base_seed: number;
+  nodes: CompositeNodeResult[]; // one per sub-sim, in execution order
+  links_applied: AppliedLink[];
+  composite_outcome: {
+    terminal_node: string;
+    success_probability: number;
+    avg_revenue: number;
+  };
+  contribution: Array<{ node_id: string; label: string; note: string }>;
+  summary: string;              // one-paragraph narrative of how domains fed each other
+}
+
+// Response from GET /api/composites/{id} — the stored composite + results if run.
+export interface CompositeDetail {
+  composite_id: string;
+  name: string;
+  status: string;
+  num_runs: number;
+  nodes: CompositeNode[];
+  links: CompositeLink[];
+  created_at: string;
+  results?: CompositeRunResult | null;
+}
+
 // One downstream node affected by a do() intervention
 export interface InterventionEffect {
   uuid: string;
@@ -831,4 +970,90 @@ export interface InterventionResult {
   intervened_node: { uuid: string; name: string };
   effects: InterventionEffect[]; // sorted by abs(predicted_change) desc
   note: string;                  // honest framing
+}
+
+// --- Hero Run (LLM-driven agents in the loop) ---
+// A hero run is a SINGLE deterministic-seed path where, at a few key decision
+// ticks, the most influential agent makes a real Claude decision grounded in its
+// persona + market state instead of the hardcoded formula. ONE illustrative
+// explanatory path — NOT a statistical Monte Carlo result. Budget-capped.
+
+// One per-step metric point along the hero path
+export interface HeroTimelinePoint {
+  t: number;
+  revenue: number;
+  customers: number;
+  market_share: number;
+}
+
+// One LLM-in-the-loop decision an agent made at a key tick
+export interface HeroDecision {
+  t: number;
+  agent_id: string;
+  agent_type: string;
+  agent_name: string;
+  persona_summary: string;
+  market_snapshot: Record<string, number> | string;   // compact snapshot fed to Claude (object of metrics)
+  decision: string;          // short verb/choice the agent made
+  rationale: string;         // 1-2 sentence Claude rationale
+  applied_effect: number;    // the numeric nudge it produced
+}
+
+// Response from POST /api/simulations/{sim_id}/hero-run
+export interface HeroRunResult {
+  base_seed: number;
+  time_unit: string;
+  timeline: HeroTimelinePoint[];
+  decisions: HeroDecision[];
+  outcome: {
+    success: boolean;
+    final_revenue: number;
+  };
+  narrative: string;          // one-paragraph wrap-up
+  decisions_used: number;
+  decisions_budget: number;
+}
+
+// --- Multi-Objective Pareto Optimizer ---
+
+// The four objective metrics the optimizer can search over. success_probability
+// is 0-100; avg_breakeven_month is in time units (lower is better, so minimize).
+export type ObjectiveMetric =
+  | "success_probability"
+  | "avg_revenue"
+  | "avg_market_share"
+  | "avg_breakeven_month";
+
+export type ObjectiveDirection = "maximize" | "minimize";
+
+// One objective in the POST /api/simulations/{sim_id}/optimize body.
+export interface OptimizeObjective {
+  metric: ObjectiveMetric;
+  direction: ObjectiveDirection;
+}
+
+// One evaluated candidate config. overrides maps a searched variable name to its
+// drawn value; metrics carries all four engine metrics for the low-N evaluation.
+export interface OptimizeCandidate {
+  id: number;
+  overrides: Record<string, number>;
+  metrics: {
+    success_probability: number;
+    avg_revenue: number;
+    avg_market_share: number;
+    avg_breakeven_month: number;
+  };
+  on_frontier: boolean;
+}
+
+// Response from POST /api/simulations/{sim_id}/optimize. base_seed is shared
+// across ALL candidate evaluations so comparisons are signal, not MC noise.
+export interface OptimizeResult {
+  base_seed: number;
+  searched_variables: Array<{ name: string; label: string; min: number; max: number }>;
+  objectives: OptimizeObjective[];
+  candidates: OptimizeCandidate[];
+  frontier: number[];        // candidate ids on the Pareto frontier, sorted by 1st objective
+  knee_point: number | null; // recommended best-balanced candidate id, or null
+  evaluated: number;
 }

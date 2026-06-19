@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Plus, FolderKanban, Loader2, Trash2, Network, FileText, Play } from "lucide-react";
+import { Plus, FolderKanban, Loader2, Trash2, Network, FileText } from "lucide-react";
 import { listProjects, deleteProject } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import type { Project } from "@/types";

@@ -6,7 +6,6 @@ import json
 import os
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
-from google.cloud.firestore_v1 import AsyncClient
 
 from app.config import settings
 

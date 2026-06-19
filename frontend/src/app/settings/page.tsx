@@ -9,9 +9,10 @@ import { getDocument, updateDocument } from "@/lib/firebase/firestore";
 import { useToast } from "@/components/ui/toast";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getApiUrl, formatDate } from "@/lib/utils";
-import { getUserUsage } from "@/lib/api";
+import { formatDate } from "@/lib/utils";
+import { getUserUsage, exportSimulations, deleteCurrentUser } from "@/lib/api";
 import type { UserUsage } from "@/types";
+import type { User as FirebaseUser } from "firebase/auth";
 import {
   User, Bell, Palette, BarChart2, Shield, Download, Trash2, Check, Loader2, LogOut,
 } from "lucide-react";
@@ -30,7 +31,7 @@ export default function SettingsPage() {
   const { toast } = useToast();
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<SettingsTab>("account");
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<FirebaseUser | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   // Form states
@@ -115,12 +116,7 @@ export default function SettingsPage() {
     if (!user) return;
     setExporting(true);
     try {
-      const token = await user.getIdToken();
-      const res = await fetch(`${getApiUrl()}/api/export/simulations?format=${format}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error("Export failed");
-      const blob = await res.blob();
+      const blob = await exportSimulations(format);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -153,12 +149,7 @@ export default function SettingsPage() {
 
     setDeleting(true);
     try {
-      const token = await user.getIdToken();
-      const res = await fetch(`${getApiUrl()}/api/users/me`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error("Delete failed");
+      await deleteCurrentUser();
       await logOut();
       router.push("/login");
     } catch {
