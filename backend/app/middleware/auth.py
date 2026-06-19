@@ -2,7 +2,7 @@
 Firebase Auth middleware for FastAPI.
 Verifies ID tokens from the Authorization header and returns user claims.
 """
-from fastapi import Depends, HTTPException, Header
+from fastapi import HTTPException, Header
 from typing import Optional
 from app.services.firebase_admin import verify_id_token
 

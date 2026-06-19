@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.middleware.auth import get_current_user
-from app.services.report_agent import ReportAgent, Report, report_agent
+from app.services.report_agent import ReportAgent, Report
 
 logger = logging.getLogger(__name__)
 

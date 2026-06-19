@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { onAuthChange } from "@/lib/firebase/auth";
 import { getAnalyticsSummary } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 import type { AnalyticsSummary } from "@/types";
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -46,6 +47,7 @@ function timeAgo(dateStr: string): string {
 }
 
 export default function AnalyticsPage() {
+  const { toast } = useToast();
   const [userId, setUserId] = useState<string | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
@@ -64,10 +66,12 @@ export default function AnalyticsPage() {
     try {
       const data = await getAnalyticsSummary();
       setSummary(data);
-    } catch {} finally {
+    } catch (err: any) {
+      toast({ title: "failed to load analytics", description: err.message || "check your connection and try again", variant: "error" });
+    } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [userId, toast]);
 
   useEffect(() => {
     if (!authReady || !userId) {

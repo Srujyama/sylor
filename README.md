@@ -63,6 +63,40 @@ sylor/
   full simulation configuration (variables, agents, assumptions) via Claude.
 - **ReACT report generation** — Claude plans an outline, then writes each section using a
   tool-using ReACT loop over the knowledge graph and simulation results.
+- **Decision memo generator** — one click turns a simulation's results into a fixed six-section
+  executive memo (recommendation, evidence, sensitivities, risks, dissent, next questions).
+- **Counterfactual diff engine** — direct-override paired-seed reruns isolate a single change
+  into pure signal: per-metric deltas, per-timeline-point revenue delta, and risk-factor
+  appeared/disappeared sets with a plain-English explanation.
+- **Per-run explainer** — finds the path nearest a p10/p50/p90 percentile, replays it, extracts
+  the pivotal agent events, and narrates why that run went the way it did.
+- **Scenario tree** — every what-if, duplicate, or branch becomes a node in a git-style tree of
+  futures; branch a sim, view its tree, and compare any two branches.
+- **Multi-objective Pareto optimizer** — Latin-hypercube search over the variable ranges with
+  seeded low-N evaluation produces a direction-aware Pareto frontier and a knee-point
+  "best balanced" recommendation.
+- **Bayesian calibration from data** — fits engine variables to an uploaded historical CSV via a
+  conjugate-normal posterior, reporting prior→posterior shift, posterior uncertainty, and a
+  calibration score (lightweight moment-matching, not full MCMC).
+- **Causal graph + do-operator** — promotes the knowledge graph's typed edges to a directed DAG
+  with cycle detection; `do(node, ±magnitude)` propagates a signed, decaying, bounded effect
+  downstream (directional inference, not point estimates).
+- **Cross-domain composite simulations** — chain sub-sims into a DAG where one model's output
+  drives another's inputs (biology binding-rate → business efficacy → finance runway) with
+  genuine per-path uncertainty propagation under a shared seed.
+- **Agent network effects / contagion** — an opt-in influence matrix spreads churn and
+  competitive pressure between agents, producing cascades and tipping points; byte-identical to
+  the prior engine when disabled.
+- **Live simulation theater + transcripts** — a deterministic replay path records per-tick agent
+  actions for a play/pause/scrub theater view, and a batched LLM call narrates the log as a
+  persona-voiced transcript.
+- **LLM-driven hero runs** — one seeded path where the most-influential agent makes an actual
+  Claude decision at a few key ticks (hard call budget, formula fallback) — one illustrative
+  LLM-in-the-loop path, not a statistical result.
+- **AI copilot** — reads your results, variables, and run history to suggest 3–5 typed
+  next-experiment ideas (sweep/branch/whatif/compare) with one-click "run it".
+- **Zero-signup demo** — a public `/demo` page runs a real capped simulation with no auth; it can
+  be claimed as your first simulation after signup.
 
 See [plan.md](plan.md) for the current roadmap and open questions.
 

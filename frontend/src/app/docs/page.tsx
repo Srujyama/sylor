@@ -3,10 +3,9 @@
 export const dynamic = 'force-dynamic';
 
 import { useState } from "react";
-import Link from "next/link";
 import {
-  BookOpen, Rocket, Code2, BarChart3, FlaskConical, TrendingUp, Zap,
-  ChevronRight, ExternalLink, Search, Layers, Upload, Users2, Settings, Key,
+  BookOpen, Rocket, Code2, BarChart3, FlaskConical, TrendingUp,
+  ChevronRight, ExternalLink, Search, Layers, Upload, Users2,
 } from "lucide-react";
 
 type DocSection = "getting-started" | "simulations" | "domains" | "api" | "data" | "agents";
@@ -276,7 +275,7 @@ export default function DocsPage() {
                   <p>• First row should contain column headers</p>
                   <p>• At least one numeric column is required for simulation</p>
                   <p>• Date columns are auto-detected for time-series analysis</p>
-                  <p>• Maximum file size: 10 MB (free), 100 MB (pro)</p>
+                  <p>• Maximum file size: 10 MB</p>
                   <p>• Missing values are handled automatically using interpolation</p>
                 </div>
               </DocBlock>
@@ -289,37 +288,90 @@ export default function DocsPage() {
               <div>
                 <h2 className="text-lg font-semibold text-white mb-2">API reference</h2>
                 <p className="text-xs text-white/40 leading-relaxed">
-                  Access Sylor programmatically. All endpoints require an API key in the Authorization header.
+                  Access Sylor programmatically. Protected endpoints require your Firebase ID token in the
+                  Authorization header. The selection below covers the highest-value routes — the live,
+                  always-current API surface is the FastAPI OpenAPI spec.
                 </p>
               </div>
 
+              <a
+                href="https://sylor-api.fly.dev/docs"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="surface p-4 flex items-center gap-3 hover:bg-white/[0.04] transition-colors group"
+              >
+                <Code2 className="w-4 h-4 text-white/30 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-medium text-white/70">interactive API docs (OpenAPI)</div>
+                  <div className="text-[10px] text-white/25">
+                    https://sylor-api.fly.dev/docs — authoritative, lists every endpoint and schema
+                  </div>
+                </div>
+                <ExternalLink className="w-3.5 h-3.5 text-white/20 group-hover:text-white/50 transition-colors shrink-0" />
+              </a>
+
               <div className="surface p-4 text-xs font-mono text-white/40 bg-white/[0.01]">
-                <span className="text-white/20">Authorization:</span> Bearer sk-sylor-your-api-key
+                <span className="text-white/20">Authorization:</span> Bearer &lt;firebase-id-token&gt;
               </div>
 
               {[
-                { method: "POST", path: "/api/simulations", desc: "Create a new simulation" },
-                { method: "GET", path: "/api/simulations", desc: "List all simulations (requires user_id query param)" },
-                { method: "GET", path: "/api/simulations/:id", desc: "Get simulation details" },
-                { method: "POST", path: "/api/simulations/:id/run", desc: "Run/rerun a simulation" },
-                { method: "GET", path: "/api/simulations/:id/results", desc: "Get simulation results" },
-                { method: "POST", path: "/api/simulations/:id/duplicate", desc: "Duplicate a simulation" },
-                { method: "DELETE", path: "/api/simulations/:id", desc: "Delete a simulation" },
-                { method: "POST", path: "/api/context/analyze", desc: "AI-analyze context to generate variables and agents" },
-              ].map((endpoint) => (
-                <div key={endpoint.path + endpoint.method} className="surface p-4 flex items-center gap-3">
-                  <span className={`tag text-[9px] w-14 justify-center shrink-0 ${
-                    endpoint.method === "GET" ? "tag-green" : endpoint.method === "POST" ? "tag-blue" : "tag-red"
-                  }`}>{endpoint.method}</span>
-                  <code className="text-xs font-mono text-white/50 flex-1">{endpoint.path}</code>
-                  <span className="text-[10px] text-white/25">{endpoint.desc}</span>
+                { group: "simulations", endpoints: [
+                  { method: "POST", path: "/api/simulations", desc: "Create a new simulation" },
+                  { method: "GET", path: "/api/simulations", desc: "List your simulations" },
+                  { method: "GET", path: "/api/simulations/:id", desc: "Get simulation details" },
+                  { method: "POST", path: "/api/simulations/:id/run", desc: "Run / rerun a simulation" },
+                  { method: "POST", path: "/api/simulations/:id/run/stream", desc: "Run with live SSE progress" },
+                  { method: "GET", path: "/api/simulations/:id/results", desc: "Get simulation results" },
+                  { method: "GET", path: "/api/simulations/:id/runs", desc: "Run history for a simulation" },
+                  { method: "POST", path: "/api/simulations/:id/duplicate", desc: "Duplicate a simulation" },
+                  { method: "DELETE", path: "/api/simulations/:id", desc: "Delete a simulation" },
+                  { method: "POST", path: "/api/simulations/compare", desc: "Compare multiple simulations" },
+                ]},
+                { group: "analysis", endpoints: [
+                  { method: "POST", path: "/api/simulations/:id/tornado", desc: "Tornado / sensitivity ranking" },
+                  { method: "POST", path: "/api/simulations/:id/sweep", desc: "Single-variable sensitivity sweep" },
+                  { method: "POST", path: "/api/simulations/:id/whatif", desc: "Natural-language what-if rerun" },
+                  { method: "POST", path: "/api/simulations/:id/diff", desc: "Counterfactual diff vs baseline" },
+                  { method: "GET", path: "/api/simulations/:id/explain", desc: "Explain a p10 / p50 / p90 run" },
+                  { method: "POST", path: "/api/simulations/:id/optimize", desc: "Multi-objective Pareto optimizer" },
+                  { method: "POST", path: "/api/simulations/:id/calibrate", desc: "Bayesian calibration from data" },
+                  { method: "POST", path: "/api/simulations/:id/copilot", desc: "Suggest next experiments" },
+                ]},
+                { group: "branching & runs", endpoints: [
+                  { method: "POST", path: "/api/simulations/:id/branch", desc: "Branch into a scenario child" },
+                  { method: "GET", path: "/api/simulations/:id/tree", desc: "Scenario tree for a sim" },
+                  { method: "GET", path: "/api/simulations/:id/replay", desc: "Theater replay event log" },
+                  { method: "GET", path: "/api/simulations/:id/transcript", desc: "Narrated agent transcript" },
+                  { method: "POST", path: "/api/simulations/:id/hero-run", desc: "LLM-in-the-loop hero path" },
+                  { method: "POST", path: "/api/simulations/:id/share", desc: "Create a public snapshot" },
+                ]},
+                { group: "projects, graphs, reports, composites", endpoints: [
+                  { method: "POST", path: "/api/context/analyze", desc: "AI-analyze context into a config" },
+                  { method: "POST", path: "/api/projects/:id/run-simulation", desc: "Run the project pipeline" },
+                  { method: "GET", path: "/api/graphs/:id/causal", desc: "Causal DAG view of a graph" },
+                  { method: "POST", path: "/api/reports/memo", desc: "Generate a decision memo" },
+                  { method: "POST", path: "/api/composites", desc: "Create a cross-domain composite" },
+                  { method: "POST", path: "/api/composites/:id/run", desc: "Run a composite simulation" },
+                ]},
+              ].map((group) => (
+                <div key={group.group} className="space-y-2">
+                  <h3 className="text-[10px] font-semibold text-white/40 tracking-widest uppercase pt-2">{group.group}</h3>
+                  {group.endpoints.map((endpoint) => (
+                    <div key={endpoint.path + endpoint.method} className="surface p-4 flex items-center gap-3">
+                      <span className={`tag text-[9px] w-14 justify-center shrink-0 ${
+                        endpoint.method === "GET" ? "tag-green" : endpoint.method === "POST" ? "tag-blue" : "tag-red"
+                      }`}>{endpoint.method}</span>
+                      <code className="text-xs font-mono text-white/50 flex-1">{endpoint.path}</code>
+                      <span className="text-[10px] text-white/25">{endpoint.desc}</span>
+                    </div>
+                  ))}
                 </div>
               ))}
 
               <DocBlock title="example: create and run a simulation">
                 <pre className="text-[10px] font-mono text-white/35 leading-relaxed overflow-x-auto">
-{`curl -X POST https://api.sylor.io/api/simulations \\
-  -H "Authorization: Bearer sk-sylor-..." \\
+{`curl -X POST https://sylor-api.fly.dev/api/simulations \\
+  -H "Authorization: Bearer <firebase-id-token>" \\
   -H "Content-Type: application/json" \\
   -d '{
     "user_id": "your-uid",

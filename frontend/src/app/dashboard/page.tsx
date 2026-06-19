@@ -6,21 +6,21 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  Plus, ArrowRight, TrendingUp, Activity, Zap, Clock, Loader2,
-  BarChart2, Trash2, Copy, RotateCcw, Search, Filter,
+  Plus, ArrowRight, TrendingUp, Activity, Zap, Loader2,
+  BarChart2, RotateCcw, Search,
   Rocket, DollarSign, FlaskConical, Percent, X, Sparkles,
-  ArrowUpRight, ArrowDownRight, CheckCircle2, Circle, GitBranch,
+  CheckCircle2, Circle, GitBranch,
   Share2, Command, SlidersHorizontal,
 } from "lucide-react";
 import { onAuthChange } from "@/lib/firebase/auth";
-import { listSimulations, getDashboardDigest } from "@/lib/api";
-import { cn, formatCurrency } from "@/lib/utils";
+import { listSimulations, mapSimulation, getDashboardDigest } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { useDemoClaim } from "@/lib/use-demo-claim";
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell,
 } from "recharts";
-import type { Simulation, SimulationCategory, DashboardDigest, DigestItem } from "@/types";
+import type { Simulation, DashboardDigest, DigestItem } from "@/types";
 
 const LAST_SEEN_KEY = "sylor-last-seen";
 const DIGEST_DISMISSED_KEY = "sylor-digest-dismissed";
@@ -129,31 +129,7 @@ export default function DashboardPage() {
     try {
       setError(null);
       const data = await listSimulations(userId);
-      // Map snake_case to camelCase
-      const mapped: Simulation[] = data.map((s: any) => ({
-        id: s.id,
-        userId: s.user_id,
-        name: s.name,
-        description: s.description,
-        category: s.category,
-        config: s.config,
-        status: s.status,
-        results: s.results ? {
-          successProbability: s.results.success_probability,
-          confidenceInterval: s.results.confidence_interval,
-          avgRevenue: s.results.avg_revenue,
-          avgMarketShare: s.results.avg_market_share,
-          avgTimeToBreakeven: s.results.avg_breakeven_month,
-          riskFactors: s.results.risk_factors,
-          keyInsights: s.results.key_insights,
-          outcomeDistribution: s.results.outcome_distribution,
-          timelineAggregated: s.results.timeline_aggregated,
-          competitorReactions: s.results.competitor_reactions,
-        } : undefined,
-        createdAt: s.created_at,
-        updatedAt: s.updated_at,
-        runCount: s.run_count,
-      }));
+      const mapped: Simulation[] = data.map(mapSimulation);
       setSimulations(mapped.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()));
     } catch (err: any) {
       setError(err.message);
@@ -373,7 +349,7 @@ export default function DashboardPage() {
           </div>
           <div>
             {digest.items.map((item: DigestItem, i: number) => {
-              const Wrapper: any = item.sim_id ? Link : "div";
+              const Wrapper: React.ElementType = item.sim_id ? Link : "div";
               const wrapperProps = item.sim_id ? { href: `/simulations/${item.sim_id}` } : {};
               const tone =
                 item.type === "completed" ? "dot-green"
@@ -381,7 +357,7 @@ export default function DashboardPage() {
                 : "dot-yellow";
               return (
                 <Wrapper
-                  key={i}
+                  key={item.sim_id ?? `${item.type}-${i}`}
                   {...wrapperProps}
                   className={cn(
                     "flex items-center gap-3 px-5 py-2.5 text-xs transition-colors group",

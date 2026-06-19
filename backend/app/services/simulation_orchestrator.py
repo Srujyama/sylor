@@ -20,7 +20,6 @@ Improvements over MiroFish:
 import asyncio
 import logging
 import uuid
-import json
 from typing import Optional, List, Dict, Any, Callable, Awaitable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -28,18 +27,15 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
-from app.services.knowledge_graph import (
-    KnowledgeGraphBuilder, graph_builder, KnowledgeGraph, Ontology
-)
-from app.services.text_processor import TextProcessor, ProcessedDocument
+from app.services.knowledge_graph import graph_builder
+from app.services.text_processor import TextProcessor
 from app.services.agent_profile_generator import (
-    AgentProfileGenerator, profile_generator, AgentProfile
+    profile_generator, AgentProfile
 )
-from app.services.report_agent import ReportAgent, report_agent, Report
+from app.services.report_agent import ReportAgent
 from app.services.simulation_engine import SimulationEngine
-from app.services.llm_client import llm_client
 from app.models.simulation import (
-    SimulationConfig, SimulationResults, SimulationVariable, AgentConfig,
+    SimulationConfig, SimulationVariable, AgentConfig,
     SimulationCategory, SimulationStatus,
 )
 
@@ -710,7 +706,6 @@ class SimulationOrchestrator:
         # Agents: prefer the project's generated profiles (persona-driven).
         agents: List[AgentConfig] = []
         if project.agent_profiles:
-            from app.services.agent_profile_generator import AgentProfile
             for raw in project.agent_profiles:
                 try:
                     profile = AgentProfile.from_dict(raw)

@@ -3,9 +3,112 @@
 export const dynamic = 'force-dynamic';
 
 import Link from "next/link";
-import { ArrowLeft, Rocket, Zap, Bug, Sparkles, BarChart3 } from "lucide-react";
+import { Rocket, Bug, Sparkles } from "lucide-react";
 
 const changelog = [
+  {
+    version: "3.0.0",
+    date: "June 16, 2026",
+    title: "Pareto Optimizer, Network Effects & LLM Hero Runs",
+    type: "feature" as const,
+    items: [
+      "multi-objective Pareto optimizer — \"find me the best plan\": Latin-hypercube search over your variable ranges, a direction-aware Pareto frontier, and a knee-point \"best balanced\" recommendation",
+      "agent network effects / contagion — an influence matrix spreads churn and competitive pressure between agents, producing cascades and tipping points (opt-in, byte-identical when off)",
+      "LLM-in-the-loop hero runs — one seeded path where the most-influential agent makes an actual Claude decision at key ticks, with a hard call budget and graceful formula fallback",
+      "optimize tab with an objective builder and a Pareto scatter; network-effects card on results when contagion is enabled; hero-run tab with a decision timeline",
+    ],
+  },
+  {
+    version: "2.4.0",
+    date: "June 2, 2026",
+    title: "Cross-Domain Composite Simulations",
+    type: "feature" as const,
+    items: [
+      "composite simulations — chain sub-sims across domains into a DAG where one model's output drives another's inputs (biology binding-rate → business efficacy → finance runway)",
+      "genuine per-path uncertainty propagation — upstream path i feeds downstream path i under a shared seed, not mean-passed",
+      "new /composites section with a node-and-link builder plus a DAG detail and run page",
+      "engine refactored into run_single_path / aggregate_paths with an iterative topo sort — non-breaking, reproduces existing runs exactly",
+    ],
+  },
+  {
+    version: "2.2.0",
+    date: "May 19, 2026",
+    title: "Bayesian Calibration & Causal Graphs",
+    type: "feature" as const,
+    items: [
+      "Bayesian calibration from uploaded data — fit engine variables to your historical CSV via a conjugate-normal posterior; prior→posterior shift, uncertainty, and a 0-100 calibration score (honest framing: moment-matching, not full MCMC)",
+      "causal graph + do-operator — promote the knowledge graph's typed edges to a directed DAG and propagate do(node, ±magnitude) effects downstream (directional inference, not point estimates)",
+      "upload parser now returns raw numeric series so calibration fits real distributions, not single-point means",
+      "calibrate tab with column mapping and a causal-view toggle with an intervention panel on the graph page",
+    ],
+  },
+  {
+    version: "2.0.0",
+    date: "May 5, 2026",
+    title: "Counterfactual Diff, Run Explainer & Lexical Search",
+    type: "feature" as const,
+    items: [
+      "counterfactual diff engine — direct-override paired-seed reruns give per-metric and per-timeline deltas plus risk-factor appeared/disappeared sets with an AI explanation",
+      "per-run explainer — find the path nearest a p10 / p50 / p90 percentile, replay it, and narrate why it went that way",
+      "narrative dashboard digest — a \"since you were away\" strip with completed runs, stale-sim nudges, and one AI headline",
+      "lexical graph search — TF-IDF cosine over all entities replaces the old \"score the first 50\" truncation, with optional LLM re-rank",
+      "activation checklist — a dismissible getting-started card with a progress ring",
+    ],
+  },
+  {
+    version: "1.6.0",
+    date: "April 21, 2026",
+    title: "Live Theater, Transcripts, Copilot & Zero-Signup Demo",
+    type: "feature" as const,
+    items: [
+      "live simulation theater — watch agents act tick by tick on a stage with play/pause/scrub, an event ticker, and a live-building outcome chart",
+      "agent conversation transcripts — one batched LLM call narrates the replay log in the voice of each persona",
+      "zero-signup demo — a public /demo runs a real capped simulation and can be claimed as your first sim after signup",
+      "AI copilot — reads your results and run history to suggest typed next experiments with one-click run buttons",
+      "PWA and mobile polish, plus a keyboard layer with a ? cheat-sheet modal",
+    ],
+  },
+  {
+    version: "1.3.0",
+    date: "April 7, 2026",
+    title: "Tornado, What-If, Scenario Trees & Decision Memos",
+    type: "feature" as const,
+    items: [
+      "tornado-chart sensitivity analysis with a dedicated sensitivity tab",
+      "natural-language what-if — \"what if I raise prices 20%?\" parses into overrides and a paired same-seed rerun with delta cards and an AI verdict",
+      "scenario tree — every what-if/branch becomes a node in a git-style tree of futures, with a left-to-right SVG tree page and compare-branches",
+      "decision memo generator — a one-click six-section executive memo from a sim's results",
+      "shareable results — frozen public snapshots at /s/[shareId]; run history with vs-previous-run delta chips",
+      "interactive knowledge-graph visualization, real per-user analytics, command palette v2, and a public stats endpoint",
+    ],
+  },
+  {
+    version: "1.0.0",
+    date: "March 24, 2026",
+    title: "The Pipeline Is Real — Persistence, Personas & Streaming",
+    type: "feature" as const,
+    items: [
+      "the document → knowledge graph → personas → simulation → report pipeline runs end to end via POST /api/projects/:id/run-simulation",
+      "agent personas now actually modulate the simulation math — sensitivity, risk tolerance, activity, influence, sentiment bias, and decision style genuinely diverge under a fixed seed",
+      "deterministic seeding with reproducible runs and recorded base_seed",
+      "confidence diagnostics — Monte Carlo standard error, a convergence check, and a forecast-confidence badge",
+      "real SSE streaming — engine progress is streamed during the run with a polling fallback",
+    ],
+  },
+  {
+    version: "0.6.0",
+    date: "March 17, 2026",
+    title: "Security, Persistence & Honest Surfaces",
+    type: "fix" as const,
+    items: [
+      "added authentication and per-user scoping to the projects, graphs, reports, context, and upload routers",
+      "projects now persist to Firestore and survive restarts instead of living in memory",
+      "rate limiter rekeyed on the verified uid (was spoofable via an unverified token prefix); expensive tier no longer double-counted",
+      "removed mock data masquerading as UI — real compare flow, real templates, real CSV parsing in the wizard, and the fake settings API key",
+      "FormData uploads no longer break on a bad Content-Type; silent catch blocks now surface toast errors",
+      "added GitHub Actions CI running backend pytest on Python 3.12 and the frontend build",
+    ],
+  },
   {
     version: "0.5.0",
     date: "March 9, 2026",

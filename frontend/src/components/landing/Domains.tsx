@@ -1,4 +1,4 @@
-import { TrendingUp, FlaskConical, BarChart3, Briefcase, LineChart, Dna } from "lucide-react";
+import { TrendingUp, FlaskConical, Briefcase } from "lucide-react";
 
 const domains = [
   {

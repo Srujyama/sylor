@@ -15,7 +15,6 @@ import {
   Shield,
   Lightbulb,
   DollarSign,
-  PieChart,
 } from "lucide-react";
 import { onAuthChange } from "@/lib/firebase/auth";
 import { listSimulations, compareSimulations } from "@/lib/api";
@@ -29,7 +28,6 @@ import {
   Tooltip,
   ResponsiveContainer,
   Cell,
-  Legend,
 } from "recharts";
 
 const categoryColors: Record<string, string> = {

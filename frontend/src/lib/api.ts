@@ -13,6 +13,10 @@ import type {
   ReplayData, AgentTranscript, DemoPreset, DemoRunResponse, CopilotResponse,
   DiffResponse, ExplainResponse, ExplainPercentile, DashboardDigest,
   CalibrationResult, CausalGraph, InterventionResult,
+  CompositeConfig, CompositeListItem, CompositeDetail, CompositeRunResult,
+  OptimizeObjective, OptimizeResult,
+  HeroRunResult,
+  ApiSimulation, Simulation, SimulationResults,
 } from "@/types";
 
 interface FetchOptions extends RequestInit {
@@ -141,14 +145,53 @@ async function fetchWithRetry(
 
 // ─── Simulations ──────────────────────────────────────────
 
-export async function listSimulations(userId: string) {
-  const res = await fetchWithRetry(
-    `${getApiUrl()}/api/simulations?user_id=${userId}`
-  );
+/**
+ * Normalize the API's snake_case simulation shape into the camelCase Simulation
+ * used across the UI. Single source of truth for the snake→camel mapping that was
+ * previously duplicated in dashboard, simulations list, and the command palette.
+ */
+export function mapSimulation(s: ApiSimulation): Simulation {
+  const r = s.results;
+  const results: SimulationResults | undefined = r
+    ? ({
+        successProbability: r.success_probability,
+        confidenceInterval: r.confidence_interval,
+        avgRevenue: r.avg_revenue,
+        avgMarketShare: r.avg_market_share,
+        avgTimeToBreakeven: r.avg_breakeven_month,
+        riskFactors: r.risk_factors,
+        keyInsights: r.key_insights,
+        outcomeDistribution: r.outcome_distribution,
+        timelineAggregated: r.timeline_aggregated,
+        competitorReactions: r.competitor_reactions,
+      } as SimulationResults)
+    : undefined;
+  return {
+    id: s.id,
+    userId: s.user_id,
+    name: s.name,
+    description: s.description,
+    category: s.category,
+    config: s.config,
+    status: s.status,
+    results,
+    createdAt: s.created_at,
+    updatedAt: s.updated_at,
+    runCount: s.run_count,
+    parent_id: s.parent_id,
+    root_id: s.root_id,
+    branch_label: s.branch_label,
+  };
+}
+
+// The owner scope is enforced server-side via the auth token; the userId arg is
+// kept for call-site clarity but no longer sent as a query param.
+export async function listSimulations(_userId?: string): Promise<ApiSimulation[]> {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/simulations`);
   return res.json();
 }
 
-export async function getSimulation(simId: string) {
+export async function getSimulation(simId: string): Promise<ApiSimulation> {
   const res = await fetchWithRetry(
     `${getApiUrl()}/api/simulations/${simId}`
   );
@@ -402,6 +445,19 @@ export async function parseUpload(file: File) {
 export async function getUserUsage() {
   const res = await fetchWithRetry(`${getApiUrl()}/api/users/me/usage`);
   return res.json();
+}
+
+// Exports all of the current user's simulation data as a downloadable Blob.
+export async function exportSimulations(format: "json" | "csv"): Promise<Blob> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/export/simulations?format=${format}`
+  );
+  return res.blob();
+}
+
+// Permanently deletes the current user's account and all associated data.
+export async function deleteCurrentUser(): Promise<void> {
+  await fetchWithRetry(`${getApiUrl()}/api/users/me`, { method: "DELETE" });
 }
 
 // ─── Projects (MiroFish-inspired unified pipeline) ────────
@@ -935,6 +991,108 @@ export async function interveneCausal(
       body: JSON.stringify(data),
       timeout: 60000,
       retries: 0,
+    }
+  );
+  return res.json();
+}
+
+// ─── Composites (cross-domain composite simulations) ─────
+
+// A composite is a DAG of sub-simulations linked by metric->variable edges.
+// Creates + persists it owner-scoped. 422 if links reference unknown
+// node_id/to_variable or the link graph has a cycle (must be a DAG).
+export async function createComposite(
+  config: CompositeConfig
+): Promise<{ composite_id: string; status: string }> {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/composites`, {
+    method: "POST",
+    body: JSON.stringify(config),
+    retries: 0, // don't retry — avoid double-creating composites
+  });
+  return res.json();
+}
+
+// Owner-scoped list of the user's composites (summary fields only).
+export async function listComposites(): Promise<{ composites: CompositeListItem[] }> {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/composites`);
+  return res.json();
+}
+
+// The full stored composite + results if it has been run. 404/403.
+export async function getComposite(id: string): Promise<CompositeDetail> {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/composites/${id}`);
+  return res.json();
+}
+
+export async function deleteComposite(id: string): Promise<void> {
+  // 204 No Content — nothing to parse
+  await fetchWithRetry(`${getApiUrl()}/api/composites/${id}`, {
+    method: "DELETE",
+  });
+}
+
+// Runs the composite in topological order, propagating per-path uncertainty
+// across domains, persists + returns the results. Expensive — long timeout,
+// no retries (avoid double-running). 404/403; 409 if the composite has no nodes.
+export async function runComposite(
+  id: string,
+  opts?: { num_runs?: number }
+): Promise<CompositeRunResult> {
+  const res = await fetchWithRetry(`${getApiUrl()}/api/composites/${id}/run`, {
+    method: "POST",
+    body: JSON.stringify(opts || {}),
+    timeout: 300000, // chained Monte Carlo across domains — can take minutes
+    retries: 0,
+  });
+  return res.json();
+}
+
+// ─── Multi-Objective Pareto Optimizer ─────────────────────
+
+// Searches the chosen variables' [min,max] ranges (Latin-hypercube), evaluating
+// each candidate config with a SHARED base_seed so comparisons are signal, not
+// Monte-Carlo noise, then returns the Pareto-non-dominated frontier + a knee
+// point. The HEAVIEST endpoint — many low-N sims; long timeout, no retries.
+export async function optimizeSimulation(
+  simId: string,
+  body: {
+    objectives: OptimizeObjective[];
+    variables?: string[];
+    budget?: number;
+    runs_per_candidate?: number;
+  }
+): Promise<OptimizeResult> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/optimize`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+      timeout: 300000, // budget x runs_per_candidate low-N sims — can take minutes
+      retries: 0,      // don't retry — expensive, avoid double-running
+    }
+  );
+  return res.json();
+}
+
+// ─── Hero Run (LLM-driven agents in the loop) ─────────────
+
+// Runs ONE deterministic-seed path where, at a few key decision ticks, the most
+// influential agent makes a real Claude decision grounded in its persona + the
+// current market state instead of the hardcoded formula. This is ONE illustrative
+// explanatory path — NOT the 1000-path Monte Carlo (which stays formula-based +
+// fast). Budget-capped: max_decisions (1-12, default 6) bounds total LLM calls.
+// Expensive — long timeout, no retries (avoid duplicate LLM spend).
+export async function heroRun(
+  simId: string,
+  body?: { max_decisions?: number }
+): Promise<HeroRunResult> {
+  const res = await fetchWithRetry(
+    `${getApiUrl()}/api/simulations/${simId}/hero-run`,
+    {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+      timeout: 300000, // seeded path + several LLM decisions + narration — can take minutes
+      retries: 0,      // don't retry — expensive, avoid duplicate LLM calls
     }
   );
   return res.json();

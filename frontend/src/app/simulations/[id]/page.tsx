@@ -11,22 +11,24 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SliderWithInput } from "@/components/ui/slider-with-input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  ArrowLeft, Zap, TrendingUp, AlertTriangle, CheckCircle, Info,
+  ArrowLeft, Zap, TrendingUp, AlertTriangle, CheckCircle,
   BarChart3, GitBranch, Users2, Lightbulb, RefreshCw, Download, Loader2,
-  Share2, FileJson, FileSpreadsheet, Clock, SlidersHorizontal,
+  Share2, FileJson, FileSpreadsheet, SlidersHorizontal,
   Sparkles, ArrowUpRight, ArrowDownRight, ChevronDown, ChevronUp, History, Gauge,
   FileText, Network, GitFork, GitCompareArrows, ScanSearch, XCircle,
+  Target, Plus, Trash2, Star, Wand2, Bot, Quote,
 } from "lucide-react";
 import { SimulationTheater } from "@/components/theater/SimulationTheater";
 import { CopilotPanel } from "@/components/copilot/CopilotPanel";
 import { CalibratePanel } from "@/components/calibrate/CalibratePanel";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { cn, formatCurrency, formatDate } from "@/lib/utils";
+import { cn, formatCurrency, formatDate, formatNumber } from "@/lib/utils";
 import {
   exportToCSV, exportToJSON, getSimulation, getResults, runSimulationStream,
   runTornado, runWhatIf, shareSimulation, revokeShare, getSimulationRuns,
   generateMemo, branchSimulation, getScenarioTree, runDiff, explainRun,
+  optimizeSimulation, heroRun,
   type SimulationProgress,
 } from "@/lib/api";
 import { getDomainLabels } from "@/lib/domain-labels";
@@ -36,11 +38,55 @@ import type { MemoAudience } from "@/types";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, Legend, ReferenceLine,
+  ScatterChart, Scatter,
 } from "recharts";
 import type {
   TornadoResponse, WhatIfResponse, RunHistoryEntry, DiffResponse,
   ExplainResponse, ExplainPercentile,
+  OptimizeObjective, OptimizeResult, OptimizeCandidate,
+  ObjectiveMetric, ObjectiveDirection,
+  HeroRunResult,
 } from "@/types";
+
+// Color language by agent type — mirrors the theater dot/chart palette so the
+// hero-run decision cards share the same visual vocabulary.
+const HERO_AGENT_COLORS: Record<string, string> = {
+  customer: "#3b82f6",
+  competitor: "#ef4444",
+  regulator: "#eab308",
+  investor: "#22c55e",
+  market: "#06b6d4",
+  trader: "#f97316",
+  market_maker: "#8b5cf6",
+  molecule: "#22c55e",
+  enzyme: "#06b6d4",
+  data_stream: "#ef4444",
+};
+function heroAgentColor(type: string): string {
+  return HERO_AGENT_COLORS[type] || "#8b5cf6";
+}
+
+// Friendly names for the four optimizer objective metrics
+const METRIC_LABELS: Record<ObjectiveMetric, string> = {
+  success_probability: "success probability",
+  avg_revenue: "avg revenue",
+  avg_market_share: "avg market share",
+  avg_breakeven_month: "avg breakeven",
+};
+
+const OBJECTIVE_METRICS: ObjectiveMetric[] = [
+  "success_probability", "avg_revenue", "avg_market_share", "avg_breakeven_month",
+];
+
+// Format one metric value for display by metric kind. success_probability is
+// 0-100 (NOT rescaled); market share is a percent; revenue is currency.
+function formatMetricValue(metric: ObjectiveMetric, v: number): string {
+  if (v == null || Number.isNaN(v)) return "—";
+  if (metric === "avg_revenue") return formatCurrency(v);
+  if (metric === "success_probability") return `${v.toFixed(1)}%`;
+  if (metric === "avg_market_share") return `${v.toFixed(2)}%`;
+  return v.toFixed(1); // avg_breakeven_month
+}
 
 const severityColor = {
   low: { badge: "success" as const, icon: CheckCircle, color: "text-green-400" },
@@ -110,6 +156,27 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
   // True when this sim belongs to a family with >1 node (a branch, or a root
   // with children) — controls whether the "scenario tree" link is shown.
   const [hasScenarioFamily, setHasScenarioFamily] = useState(false);
+
+  // Multi-objective pareto optimizer
+  const [objectives, setObjectives] = useState<OptimizeObjective[]>([
+    { metric: "success_probability", direction: "maximize" },
+    { metric: "avg_revenue", direction: "maximize" },
+  ]);
+  const [optVariables, setOptVariables] = useState<string[]>([]); // [] = all searchable
+  const [optBudget, setOptBudget] = useState(60);
+  const [optRunsPer, setOptRunsPer] = useState(100);
+  const [optLoading, setOptLoading] = useState(false);
+  const [optimization, setOptimization] = useState<OptimizeResult | null>(null);
+  const [selectedCandidate, setSelectedCandidate] = useState<OptimizeCandidate | null>(null);
+  // Which two objective metrics drive the scatter axes (default first two)
+  const [scatterX, setScatterX] = useState<ObjectiveMetric>("success_probability");
+  const [scatterY, setScatterY] = useState<ObjectiveMetric>("avg_revenue");
+
+  // Hero run — one illustrative LLM-in-the-loop path. maxDecisions is the HARD
+  // cap on total Claude decision calls across the whole run.
+  const [heroMaxDecisions, setHeroMaxDecisions] = useState(6);
+  const [heroLoading, setHeroLoading] = useState(false);
+  const [hero, setHero] = useState<HeroRunResult | null>(null);
 
   function handleExportCSV() {
     if (!results) return;
@@ -284,6 +351,70 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
       toast({ title: "couldn't save branch", description: e.message || "try again in a moment", variant: "error" });
     } finally {
       setBranching(false);
+    }
+  }
+
+  function addObjective() {
+    if (objectives.length >= 4) return;
+    // Pick the first metric not already used, falling back to revenue
+    const used = new Set(objectives.map((o) => o.metric));
+    const next = OBJECTIVE_METRICS.find((m) => !used.has(m)) || "avg_revenue";
+    setObjectives((prev) => [...prev, { metric: next, direction: next === "avg_breakeven_month" ? "minimize" : "maximize" }]);
+  }
+
+  function removeObjective(idx: number) {
+    if (objectives.length <= 1) return;
+    setObjectives((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  function updateObjective(idx: number, patch: Partial<OptimizeObjective>) {
+    setObjectives((prev) => prev.map((o, i) => (i === idx ? { ...o, ...patch } : o)));
+  }
+
+  async function handleOptimize() {
+    if (optLoading) return;
+    if (objectives.length < 1) {
+      toast({ title: "add an objective", description: "pick at least one metric to optimize for", variant: "error" });
+      return;
+    }
+    setOptLoading(true);
+    setSelectedCandidate(null);
+    try {
+      const body = {
+        objectives,
+        ...(optVariables.length > 0 ? { variables: optVariables } : {}),
+        budget: optBudget,
+        runs_per_candidate: optRunsPer,
+      };
+      const data = await optimizeSimulation(params.id, body);
+      setOptimization(data);
+      // Default the scatter axes to the first two objectives we actually got back
+      const objMetrics = data.objectives.map((o) => o.metric);
+      setScatterX(objMetrics[0] || "success_probability");
+      setScatterY(objMetrics[1] || objMetrics[0] || "avg_revenue");
+    } catch (e: any) {
+      toast({ title: "optimization failed", description: e.message || "try again in a moment", variant: "error" });
+    } finally {
+      setOptLoading(false);
+    }
+  }
+
+  // Push a candidate's overrides into the what-if slider state, then jump there
+  function applyCandidateToWhatIf(c: OptimizeCandidate) {
+    setVariableOverrides((prev) => ({ ...prev, ...c.overrides }));
+    toast({ title: "applied to what-if", description: "open the what-if tab to rerun with these values", variant: "success" });
+  }
+
+  async function handleHeroRun() {
+    if (heroLoading) return;
+    setHeroLoading(true);
+    try {
+      const data = await heroRun(params.id, { max_decisions: heroMaxDecisions });
+      setHero(data);
+    } catch (e: any) {
+      toast({ title: "hero run failed", description: e.message || "try again in a moment", variant: "error" });
+    } finally {
+      setHeroLoading(false);
     }
   }
 
@@ -727,9 +858,11 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
         <TabsList className="mb-6 max-w-full overflow-x-auto">
           <TabsTrigger value="results">Results</TabsTrigger>
           <TabsTrigger value="theater">Theater</TabsTrigger>
+          <TabsTrigger value="hero-run">Hero Run</TabsTrigger>
           <TabsTrigger value="what-if">What-If</TabsTrigger>
           <TabsTrigger value="calibrate">Calibrate</TabsTrigger>
           <TabsTrigger value="sensitivity">Sensitivity</TabsTrigger>
+          <TabsTrigger value="optimize">Optimize</TabsTrigger>
           <TabsTrigger value="agents">Agents</TabsTrigger>
           <TabsTrigger value="insights">AI Insights</TabsTrigger>
         </TabsList>
@@ -1041,6 +1174,198 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
         {/* Theater Tab — live agent replay + narrative transcript */}
         <TabsContent value="theater" className="space-y-6">
           <SimulationTheater simId={params.id} />
+        </TabsContent>
+
+        {/* Hero Run Tab — ONE illustrative LLM-in-the-loop path. At a few key
+            decision ticks the most influential agent makes a real Claude
+            decision grounded in its persona + market state, instead of the
+            hardcoded formula. NOT a statistical result. */}
+        <TabsContent value="hero-run" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Bot className="w-4 h-4 text-violet-400" />
+                Hero Run
+                <Badge variant="purple" className="ml-auto">Powered by Claude</Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <p className="text-xs text-white/30 leading-relaxed">
+                one illustrative path where your agent personas make real AI decisions at key
+                moments — not a statistical result; uses your decision budget. the rest of the
+                path stays seeded and reproducible; the AI moments are inherently non-deterministic.
+              </p>
+
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-white/25 uppercase tracking-wider">ai decisions</span>
+                  <div className="flex items-center gap-1 p-0.5 bg-white/[0.03] border border-white/[0.06]">
+                    {[3, 6, 12].map((d) => (
+                      <button
+                        key={d}
+                        onClick={() => setHeroMaxDecisions(d)}
+                        disabled={heroLoading}
+                        className={cn(
+                          "px-3 py-1 text-xs transition-all",
+                          heroMaxDecisions === d ? "bg-white/10 text-white" : "text-white/30 hover:text-white/50"
+                        )}
+                      >
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <Button variant="gradient" size="sm" onClick={handleHeroRun} disabled={heroLoading}>
+                  {heroLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
+                  {heroLoading ? "running hero simulation..." : "run a hero simulation"}
+                </Button>
+                {hero && !heroLoading && (
+                  <span className="text-[10px] text-white/25 ml-auto">
+                    {hero.decisions_used}/{hero.decisions_budget} ai decisions · seed{" "}
+                    <span className="font-mono text-white/40">{hero.base_seed}</span>
+                  </span>
+                )}
+              </div>
+
+              {heroLoading && (
+                <p className="text-xs text-white/30 flex items-center gap-2">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  running one seeded path and letting your top agents make up to {heroMaxDecisions} real
+                  AI decisions at key moments — this can take a minute...
+                </p>
+              )}
+
+              {hero && !heroLoading && (() => {
+                const heroTimeline = (hero.timeline || []).map((p) => ({
+                  t: `${(hero.time_unit || "t").charAt(0).toUpperCase()}${p.t}`,
+                  revenue: Number.isFinite(p.revenue) ? p.revenue : 0,
+                }));
+                return (
+                  <div className="space-y-6">
+                    {/* Outcome strip */}
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className={cn(
+                        "tag inline-flex items-center gap-1",
+                        hero.outcome.success ? "tag-green" : "tag-red"
+                      )}>
+                        {hero.outcome.success
+                          ? <><CheckCircle className="w-3 h-3" /> success</>
+                          : <><XCircle className="w-3 h-3" /> failure</>}
+                      </span>
+                      <span className="text-sm text-white/60">
+                        final {primaryLabel.toLowerCase()}{" "}
+                        <span className="font-mono text-white/80">{formatCurrency(hero.outcome.final_revenue)}</span>
+                      </span>
+                    </div>
+
+                    {/* Hero path revenue line */}
+                    {heroTimeline.length > 0 && (
+                      <div>
+                        <div className="text-[10px] text-white/25 uppercase tracking-wider mb-2">
+                          {primaryLabel.toLowerCase()} along the hero path
+                        </div>
+                        <ResponsiveContainer width="100%" height={220}>
+                          <LineChart data={heroTimeline} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
+                            <XAxis dataKey="t" tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false} />
+                            <YAxis tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false} tickFormatter={(v) => labels.formatPrimary(v)} />
+                            <Tooltip
+                              contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--chart-tooltip-border)", borderRadius: 0, fontSize: 12 }}
+                              formatter={(v: number) => [labels.formatPrimary(v), primaryLabel.toLowerCase()]}
+                            />
+                            <Line type="monotone" dataKey="revenue" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 2, fill: "#8b5cf6" }} />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
+
+                    {/* Vertical decision timeline */}
+                    {(hero.decisions?.length || 0) > 0 ? (
+                      <div className="space-y-2">
+                        <div className="text-[10px] text-white/25 uppercase tracking-wider">ai decisions at key moments</div>
+                        <div className="relative pl-5 border-l border-white/[0.08] space-y-4">
+                          {hero.decisions.map((d, i) => {
+                            const color = heroAgentColor(d.agent_type);
+                            return (
+                              <div key={`${d.t}-${d.agent_id}-${i}`} className="relative">
+                                <span
+                                  className="absolute -left-[1.42rem] top-1.5 w-2 h-2 rounded-full"
+                                  style={{ backgroundColor: color }}
+                                />
+                                <div className="p-3 bg-white/[0.02] border border-white/[0.05]">
+                                  {/* Header: tick + agent name/type dot */}
+                                  <div className="flex flex-wrap items-center gap-2 mb-2">
+                                    <span className="text-[10px] font-mono text-white/30">
+                                      {(hero.time_unit || "t").charAt(0)}{d.t}
+                                    </span>
+                                    <span className="dot shrink-0" style={{ backgroundColor: color }} />
+                                    <span className="text-xs font-medium text-white/80">{d.agent_name}</span>
+                                    <span className="text-[9px] uppercase tracking-wider" style={{ color: `${color}99` }}>
+                                      {d.agent_type}
+                                    </span>
+                                    {d.decision && (
+                                      <span className="tag tag-blue text-[10px] ml-auto">{d.decision}</span>
+                                    )}
+                                  </div>
+
+                                  {/* Persona summary */}
+                                  {d.persona_summary && (
+                                    <p className="text-[10px] text-white/30 leading-relaxed mb-2">{d.persona_summary}</p>
+                                  )}
+
+                                  {/* Compact market snapshot — backend sends an object of {key: number}; format it. */}
+                                  {d.market_snapshot && (
+                                    <div className="mb-2">
+                                      <span className="text-[9px] text-white/20 uppercase tracking-wider mr-1.5">market</span>
+                                      <span className="text-[10px] font-mono text-white/45">
+                                        {typeof d.market_snapshot === "object"
+                                          ? Object.entries(d.market_snapshot)
+                                              .map(([k, v]) => `${k.replace(/_/g, " ")} ${typeof v === "number" ? formatNumber(v) : v}`)
+                                              .join(" · ")
+                                          : String(d.market_snapshot)}
+                                      </span>
+                                    </div>
+                                  )}
+
+                                  {/* Claude rationale — quote style */}
+                                  {d.rationale && (
+                                    <blockquote className="border-l-2 border-violet-500/40 pl-3 py-0.5 mb-2 text-xs text-white/55 italic leading-relaxed flex items-start gap-1.5">
+                                      <Quote className="w-3 h-3 text-violet-400/50 shrink-0 mt-0.5" />
+                                      <span>{d.rationale}</span>
+                                    </blockquote>
+                                  )}
+
+                                  {/* Applied effect */}
+                                  {d.applied_effect && (
+                                    <div className="flex items-center gap-1.5 text-[10px] text-white/40">
+                                      <ArrowUpRight className="w-3 h-3 text-cyan-400/60" />
+                                      <span className="text-white/25 uppercase tracking-wider">effect</span>
+                                      <span className="text-white/55">{d.applied_effect}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-white/20 py-2">
+                        no ai decisions were spent on this path — every key tick fell back to the formula.
+                      </p>
+                    )}
+
+                    {/* Wrap-up narrative */}
+                    {hero.narrative && (
+                      <blockquote className="border-l-2 border-violet-500/40 pl-4 py-1 text-sm text-white/60 italic leading-relaxed">
+                        {hero.narrative}
+                      </blockquote>
+                    )}
+                  </div>
+                );
+              })()}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* What-If Tab */}
@@ -1516,8 +1841,516 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
           </Card>
         </TabsContent>
 
+        {/* Optimize Tab — multi-objective pareto search over variable ranges */}
+        <TabsContent value="optimize" className="space-y-6">
+          {(() => {
+            // Numeric variables that have BOTH min and max are searchable
+            const searchable = (variables || []).filter(
+              (v: any) => v.min != null && v.max != null && (v.type === "number" || v.type === "percentage" || v.type === "currency")
+            );
+            const objMetrics = (optimization?.objectives || objectives).map((o) => o.metric);
+            const candidates = optimization?.candidates || [];
+            const frontierSet = new Set(optimization?.frontier || []);
+            const knee = optimization?.knee_point ?? null;
+
+            // Scatter points. If only one objective, plot it vs candidate id.
+            const singleObjective = objMetrics.length < 2;
+            const xMetric = scatterX;
+            const yMetric = singleObjective ? scatterX : scatterY;
+            const dominated = candidates.filter((c) => !c.on_frontier).map((c) => ({
+              x: singleObjective ? c.id : c.metrics[xMetric],
+              y: singleObjective ? c.metrics[xMetric] : c.metrics[yMetric],
+              id: c.id,
+            }));
+            const onFrontier = candidates.filter((c) => c.on_frontier && c.id !== knee).map((c) => ({
+              x: singleObjective ? c.id : c.metrics[xMetric],
+              y: singleObjective ? c.metrics[xMetric] : c.metrics[yMetric],
+              id: c.id,
+            }));
+            const kneePts = candidates.filter((c) => c.id === knee).map((c) => ({
+              x: singleObjective ? c.id : c.metrics[xMetric],
+              y: singleObjective ? c.metrics[xMetric] : c.metrics[yMetric],
+              id: c.id,
+            }));
+            const byId = (id: number) => candidates.find((c) => c.id === id) || null;
+
+            return (
+              <>
+                {/* Builder */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Target className="w-4 h-4 text-violet-400" />
+                      multi-objective optimizer
+                      <Badge variant="purple" className="ml-auto">pareto</Badge>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
+                    <p className="text-xs text-white/30 leading-relaxed">
+                      searches your variable ranges for configs that best balance the objectives below.
+                      every candidate is evaluated with the same base seed so comparisons are signal, not noise —
+                      but these are many low-N sims, so treat the frontier as approximate directions, then rerun a
+                      winner at full resolution in what-if.
+                    </p>
+
+                    {/* Objectives */}
+                    <div className="space-y-2">
+                      <div className="text-[10px] text-white/25 uppercase tracking-wider">objectives ({objectives.length}/4)</div>
+                      {objectives.map((o, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <select
+                            value={o.metric}
+                            onChange={(e) => updateObjective(i, { metric: e.target.value as ObjectiveMetric })}
+                            disabled={optLoading}
+                            className="flex-1 border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white focus:outline-none focus:border-white/20"
+                          >
+                            {OBJECTIVE_METRICS.map((m) => (
+                              <option key={m} value={m} className="bg-[#15151c]">{METRIC_LABELS[m]}</option>
+                            ))}
+                          </select>
+                          <div className="flex items-center p-0.5 bg-white/[0.03] border border-white/[0.06]">
+                            {(["maximize", "minimize"] as ObjectiveDirection[]).map((d) => (
+                              <button
+                                key={d}
+                                onClick={() => updateObjective(i, { direction: d })}
+                                disabled={optLoading}
+                                className={cn(
+                                  "px-2.5 py-1 text-[10px] transition-all",
+                                  o.direction === d ? "bg-white/10 text-white" : "text-white/30 hover:text-white/50"
+                                )}
+                              >
+                                {d}
+                              </button>
+                            ))}
+                          </div>
+                          <button
+                            onClick={() => removeObjective(i)}
+                            disabled={optLoading || objectives.length <= 1}
+                            className="p-2 text-white/20 hover:text-red-400/70 disabled:opacity-30 transition-colors"
+                            title="remove objective"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                      {objectives.length < 4 && (
+                        <button
+                          onClick={addObjective}
+                          disabled={optLoading}
+                          className="flex items-center gap-1.5 text-[10px] text-white/30 hover:text-white/60 transition-colors mt-1"
+                        >
+                          <Plus className="w-3 h-3" /> add objective
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Which variables (optional multi-select) */}
+                    {searchable.length > 0 ? (
+                      <div className="space-y-2">
+                        <div className="text-[10px] text-white/25 uppercase tracking-wider">
+                          variables to search {optVariables.length === 0 ? "(all searchable)" : `(${optVariables.length} selected)`}
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {searchable.map((v: any) => {
+                            const selected = optVariables.length === 0 || optVariables.includes(v.name);
+                            return (
+                              <button
+                                key={v.name}
+                                onClick={() =>
+                                  setOptVariables((prev) => {
+                                    // From "all" (empty) state, first click narrows to all-but-this
+                                    const base: string[] = prev.length === 0 ? searchable.map((s: any) => s.name as string) : prev;
+                                    const next = base.includes(v.name)
+                                      ? base.filter((n: string) => n !== v.name)
+                                      : [...base, v.name];
+                                    // If everything is selected again, collapse back to "all" (empty)
+                                    return next.length === searchable.length ? [] : next;
+                                  })
+                                }
+                                disabled={optLoading}
+                                className={cn(
+                                  "tag text-[10px] transition-all",
+                                  selected ? "tag-blue" : "opacity-40 hover:opacity-70"
+                                )}
+                              >
+                                {v.label || v.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {optVariables.length > 0 && (
+                          <button
+                            onClick={() => setOptVariables([])}
+                            disabled={optLoading}
+                            className="text-[10px] text-white/30 hover:text-white/60 transition-colors"
+                          >
+                            reset to all
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-yellow-400/50 flex items-start gap-1.5">
+                        <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                        no searchable variables — the optimizer needs at least one numeric variable with both a min and max.
+                      </p>
+                    )}
+
+                    {/* Budget + runs per candidate */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                      <div>
+                        <div className="text-[10px] text-white/25 uppercase tracking-wider mb-2">candidate configs (budget)</div>
+                        <div className="flex items-center gap-1 p-0.5 bg-white/[0.03] border border-white/[0.06] w-fit">
+                          {[30, 60, 120].map((b) => (
+                            <button
+                              key={b}
+                              onClick={() => setOptBudget(b)}
+                              disabled={optLoading}
+                              className={cn(
+                                "px-3 py-1 text-xs transition-all",
+                                optBudget === b ? "bg-white/10 text-white" : "text-white/30 hover:text-white/50"
+                              )}
+                            >
+                              {b}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-white/25 uppercase tracking-wider mb-2">runs per candidate</div>
+                        <div className="flex items-center gap-1 p-0.5 bg-white/[0.03] border border-white/[0.06] w-fit">
+                          {[50, 100, 200].map((r) => (
+                            <button
+                              key={r}
+                              onClick={() => setOptRunsPer(r)}
+                              disabled={optLoading}
+                              className={cn(
+                                "px-3 py-1 text-xs transition-all",
+                                optRunsPer === r ? "bg-white/10 text-white" : "text-white/30 hover:text-white/50"
+                              )}
+                            >
+                              {r}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-white/20">
+                      ≈ {(optBudget * optRunsPer).toLocaleString()} total low-N sims · higher budget explores more configs, more runs sharpens each estimate.
+                    </p>
+
+                    <Button
+                      variant="gradient"
+                      onClick={handleOptimize}
+                      disabled={optLoading || searchable.length === 0}
+                      className="w-full sm:w-auto"
+                    >
+                      {optLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Target className="w-4 h-4" />}
+                      {optLoading ? "searching configs..." : "find optimal configs"}
+                    </Button>
+
+                    {optLoading && (
+                      <p className="text-xs text-white/30 flex items-center gap-2">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        drawing {optBudget} candidate configs and evaluating each with {optRunsPer} runs at a shared seed — this can take a few minutes...
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Results */}
+                {optimization && !optLoading && (
+                  <>
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                      {/* Scatter */}
+                      <Card className="lg:col-span-2">
+                        <CardHeader>
+                          <CardTitle className="text-base flex items-center gap-2">
+                            <BarChart3 className="w-4 h-4 text-cyan-400" />
+                            pareto frontier
+                            <span className="text-xs font-normal text-white/25 ml-1">
+                              {optimization.frontier.length} of {optimization.evaluated} on frontier
+                            </span>
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          {/* Axis selectors (only meaningful with >=2 objectives) */}
+                          {!singleObjective && (
+                            <div className="flex flex-wrap items-center gap-3 text-[10px] text-white/30">
+                              <div className="flex items-center gap-1.5">
+                                <span className="uppercase tracking-wider">x</span>
+                                <select
+                                  value={scatterX}
+                                  onChange={(e) => setScatterX(e.target.value as ObjectiveMetric)}
+                                  className="border border-white/10 bg-white/[0.03] px-2 py-1 text-[10px] text-white focus:outline-none focus:border-white/20"
+                                >
+                                  {objMetrics.map((m) => (
+                                    <option key={m} value={m} className="bg-[#15151c]">{METRIC_LABELS[m]}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="uppercase tracking-wider">y</span>
+                                <select
+                                  value={scatterY}
+                                  onChange={(e) => setScatterY(e.target.value as ObjectiveMetric)}
+                                  className="border border-white/10 bg-white/[0.03] px-2 py-1 text-[10px] text-white focus:outline-none focus:border-white/20"
+                                >
+                                  {objMetrics.map((m) => (
+                                    <option key={m} value={m} className="bg-[#15151c]">{METRIC_LABELS[m]}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+                          )}
+                          <ResponsiveContainer width="100%" height={320}>
+                            <ScatterChart margin={{ top: 10, right: 20, left: 10, bottom: 20 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
+                              <XAxis
+                                type="number"
+                                dataKey="x"
+                                name={singleObjective ? "candidate" : METRIC_LABELS[xMetric]}
+                                tick={{ fontSize: 10, fill: "#6b7280" }}
+                                axisLine={false}
+                                tickLine={false}
+                                domain={["auto", "auto"]}
+                                tickFormatter={(v) => (singleObjective ? `${v}` : formatMetricValue(xMetric, v))}
+                                label={{ value: singleObjective ? "candidate id" : METRIC_LABELS[xMetric], position: "insideBottom", offset: -10, fontSize: 10, fill: "#6b7280" }}
+                              />
+                              <YAxis
+                                type="number"
+                                dataKey="y"
+                                name={METRIC_LABELS[yMetric]}
+                                tick={{ fontSize: 10, fill: "#6b7280" }}
+                                axisLine={false}
+                                tickLine={false}
+                                domain={["auto", "auto"]}
+                                tickFormatter={(v) => formatMetricValue(yMetric, v)}
+                                width={70}
+                                label={{ value: METRIC_LABELS[yMetric], angle: -90, position: "insideLeft", fontSize: 10, fill: "#6b7280" }}
+                              />
+                              <Tooltip
+                                cursor={{ strokeDasharray: "3 3", stroke: "rgba(255,255,255,0.15)" }}
+                                contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--chart-tooltip-border)", borderRadius: 0, fontSize: 11 }}
+                                formatter={(v: number, name: string) => [
+                                  name === "x" && singleObjective ? `#${v}` : formatMetricValue(name === "x" ? xMetric : yMetric, v),
+                                  name === "x" ? (singleObjective ? "candidate" : METRIC_LABELS[xMetric]) : METRIC_LABELS[yMetric],
+                                ]}
+                              />
+                              <Scatter
+                                name="dominated"
+                                data={dominated}
+                                fill="#6b7280"
+                                fillOpacity={0.35}
+                                onClick={(d: any) => d?.id != null && setSelectedCandidate(byId(d.id))}
+                              />
+                              <Scatter
+                                name="frontier"
+                                data={onFrontier}
+                                fill="#06b6d4"
+                                fillOpacity={0.95}
+                                onClick={(d: any) => d?.id != null && setSelectedCandidate(byId(d.id))}
+                              />
+                              <Scatter
+                                name="recommended"
+                                data={kneePts}
+                                fill="#a78bfa"
+                                shape="star"
+                                onClick={(d: any) => d?.id != null && setSelectedCandidate(byId(d.id))}
+                              />
+                            </ScatterChart>
+                          </ResponsiveContainer>
+                          <div className="flex flex-wrap gap-5 justify-center text-xs">
+                            <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-cyan-400 inline-block" /><span className="text-muted-foreground">on frontier</span></div>
+                            <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-gray-500/40 inline-block" /><span className="text-muted-foreground">dominated</span></div>
+                            {knee != null && <div className="flex items-center gap-1.5"><Star className="w-3 h-3 text-violet-400 fill-violet-400" /><span className="text-muted-foreground">recommended</span></div>}
+                          </div>
+                          <p className="text-[10px] text-white/20 text-center">
+                            click any point to inspect its config · shared seed <span className="font-mono">{optimization.base_seed}</span>
+                          </p>
+                        </CardContent>
+                      </Card>
+
+                      {/* Selected candidate side panel */}
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-base flex items-center gap-2">
+                            <ScanSearch className="w-4 h-4 text-violet-400" />
+                            {selectedCandidate ? `config #${selectedCandidate.id}` : "config detail"}
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          {!selectedCandidate ? (
+                            <p className="text-xs text-white/25 leading-relaxed">
+                              click a point on the frontier{knee != null ? " (or the starred recommendation)" : ""} to see its variable overrides and metrics here.
+                            </p>
+                          ) : (
+                            <>
+                              <div className="flex flex-wrap gap-1.5">
+                                {selectedCandidate.on_frontier && <span className="tag tag-blue text-[10px]">on frontier</span>}
+                                {selectedCandidate.id === knee && (
+                                  <span className="tag tag-green text-[10px] inline-flex items-center gap-1">
+                                    <Star className="w-3 h-3" /> recommended
+                                  </span>
+                                )}
+                                {!selectedCandidate.on_frontier && <span className="tag text-[10px]">dominated</span>}
+                              </div>
+
+                              <div>
+                                <div className="text-[10px] text-white/25 uppercase tracking-wider mb-2">metrics</div>
+                                <div className="space-y-1.5">
+                                  {OBJECTIVE_METRICS.map((m) => (
+                                    <div key={m} className="flex items-center justify-between text-xs">
+                                      <span className="text-white/40">{METRIC_LABELS[m]}</span>
+                                      <span className={cn("font-mono", objMetrics.includes(m) ? "text-white/80" : "text-white/40")}>
+                                        {formatMetricValue(m, selectedCandidate.metrics[m])}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div>
+                                <div className="text-[10px] text-white/25 uppercase tracking-wider mb-2">overrides</div>
+                                <div className="space-y-1.5">
+                                  {Object.entries(selectedCandidate.overrides).map(([name, val]) => {
+                                    const v = (variables || []).find((vv: any) => vv.name === name);
+                                    return (
+                                      <div key={name} className="flex items-center justify-between text-xs">
+                                        <span className="text-white/40">{v?.label || name}</span>
+                                        <span className="font-mono text-white/80">
+                                          {v?.unit === "$" ? formatCurrency(Number(val)) : `${Math.round(Number(val) * 100) / 100}${v?.unit && v.unit !== "$" ? v.unit : ""}`}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+
+                              <Button
+                                variant="glass"
+                                size="sm"
+                                className="w-full"
+                                onClick={() => applyCandidateToWhatIf(selectedCandidate)}
+                              >
+                                <Wand2 className="w-4 h-4" /> apply to what-if
+                              </Button>
+                            </>
+                          )}
+                        </CardContent>
+                      </Card>
+                    </div>
+
+                    {/* Compact frontier table */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-base flex items-center gap-2">
+                          <Target className="w-4 h-4 text-cyan-400" />
+                          frontier configs
+                          <span className="text-xs font-normal text-white/25 ml-1">{optimization.frontier.length} non-dominated</span>
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        {optimization.frontier.length === 0 ? (
+                          <p className="text-xs text-white/25 py-6 text-center">no non-dominated configs were found.</p>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="text-[10px] text-white/25 uppercase tracking-wider">
+                                  <th className="text-left font-normal py-2 pr-4">config</th>
+                                  {objMetrics.map((m) => (
+                                    <th key={m} className="text-right font-normal py-2 px-3">{METRIC_LABELS[m]}</th>
+                                  ))}
+                                  <th className="text-right font-normal py-2 pl-3"></th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {optimization.frontier.map((id) => {
+                                  const c = byId(id);
+                                  if (!c) return null;
+                                  const isKnee = id === knee;
+                                  return (
+                                    <tr
+                                      key={id}
+                                      onClick={() => setSelectedCandidate(c)}
+                                      className={cn(
+                                        "border-t border-white/[0.04] cursor-pointer hover:bg-white/[0.03] transition-colors",
+                                        selectedCandidate?.id === id && "bg-white/[0.04]"
+                                      )}
+                                    >
+                                      <td className="py-2.5 pr-4">
+                                        <span className="inline-flex items-center gap-1.5">
+                                          {isKnee && <Star className="w-3 h-3 text-violet-400 fill-violet-400" />}
+                                          <span className="font-mono text-white/70">#{id}</span>
+                                          {isKnee && <span className="tag tag-green text-[9px]">recommended</span>}
+                                        </span>
+                                      </td>
+                                      {objMetrics.map((m) => (
+                                        <td key={m} className="text-right py-2.5 px-3 font-mono text-white/70">
+                                          {formatMetricValue(m, c.metrics[m])}
+                                        </td>
+                                      ))}
+                                      <td className="text-right py-2.5 pl-3">
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); applyCandidateToWhatIf(c); }}
+                                          className="text-[10px] text-white/30 hover:text-violet-400 inline-flex items-center gap-1 transition-colors"
+                                        >
+                                          <Wand2 className="w-3 h-3" /> apply
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </>
+                )}
+
+                {!optimization && !optLoading && (
+                  <div className="flex items-center justify-center py-12 text-xs text-white/20">
+                    define your objectives and run the optimizer to map the trade-off frontier
+                  </div>
+                )}
+              </>
+            );
+          })()}
+        </TabsContent>
+
         {/* Agents Tab */}
         <TabsContent value="agents" className="space-y-6">
+          {/* Network effects (experimental) — only when contagion was enabled */}
+          {results.contagion_enabled && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Network className="w-4 h-4 text-violet-400" />
+                  network effects
+                  <span className="tag text-[9px] ml-1">experimental</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 gap-4 mb-3">
+                  <div className="surface-raised p-4">
+                    <div className="text-[10px] text-white/25 uppercase tracking-wider mb-1">avg cascade events</div>
+                    <div className="text-2xl font-bold text-violet-400">{formatNumber(results.avg_cascade_events ?? 0)}</div>
+                  </div>
+                  <div className="surface-raised p-4">
+                    <div className="text-[10px] text-white/25 uppercase tracking-wider mb-1">max contagion reach</div>
+                    <div className="text-2xl font-bold text-cyan-400">{((results.max_contagion_reach ?? 0) * 100).toFixed(1)}%</div>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  agents influenced each other this run — these numbers estimate how often pressure cascaded
+                  between agents and the largest share of the population a single cascade reached. experimental.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <Card>
               <CardHeader>

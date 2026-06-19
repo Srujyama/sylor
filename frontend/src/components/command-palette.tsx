@@ -4,10 +4,10 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
   Search, LayoutDashboard, Layers, BarChart3, LayoutTemplate,
-  BookOpen, Settings, Plus, ArrowRight, Command, GitBranch, Loader2,
+  BookOpen, Settings, Plus, ArrowRight, Command, GitBranch, Loader2, Boxes,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { listSimulations } from "@/lib/api";
+import { listSimulations, mapSimulation } from "@/lib/api";
 import { getCurrentUser } from "@/lib/firebase/auth";
 
 const RECENTS_KEY = "sylor-recents";
@@ -113,15 +113,16 @@ export function CommandPalette() {
     }
     setSimsLoading(true);
     listSimulations(user.uid)
-      .then((data: any[]) => {
+      .then((data) => {
         if (cancelled) return;
         const mapped: SimEntry[] = (data || [])
-          .map((s: any) => ({
+          .map(mapSimulation)
+          .map((s) => ({
             id: s.id,
             name: s.name,
             status: s.status,
-            success: s.results?.success_probability ?? null,
-            updatedAt: s.updated_at,
+            success: s.results?.successProbability ?? null,
+            updatedAt: s.updatedAt,
           }))
           .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
         setSims(mapped);
@@ -136,6 +137,8 @@ export function CommandPalette() {
     { id: "compare-sims", section: "actions", label: "Compare Simulations", description: "Compare results side by side", icon: GitBranch, action: () => navigate("/simulations/compare") },
     { id: "dashboard", section: "actions", label: "Dashboard", description: "Go to dashboard", icon: LayoutDashboard, action: () => navigate("/dashboard") },
     { id: "simulations", section: "actions", label: "Simulations", description: "View all simulations", icon: Layers, action: () => navigate("/simulations") },
+    { id: "composites", section: "actions", label: "Composites", description: "Chain simulations across domains", icon: Boxes, action: () => navigate("/composites") },
+    { id: "new-composite", section: "actions", label: "New Composite", description: "Compose a cross-domain simulation", icon: Boxes, action: () => navigate("/composites/new") },
     { id: "analytics", section: "actions", label: "Analytics", description: "View analytics & insights", icon: BarChart3, action: () => navigate("/analytics") },
     { id: "templates", section: "actions", label: "Templates", description: "Browse simulation templates", icon: LayoutTemplate, action: () => navigate("/templates") },
     { id: "docs", section: "actions", label: "Documentation", description: "Read the docs", icon: BookOpen, action: () => navigate("/docs") },
@@ -310,9 +313,13 @@ export function CommandPalette() {
                           )}
                         >
                           {entry.sim ? (
-                            <span className={cn("dot shrink-0", statusDotClass[entry.sim.status] || "dot-yellow")} />
+                            <span
+                              role="img"
+                              aria-label={`status: ${entry.sim.status}`}
+                              className={cn("dot shrink-0", statusDotClass[entry.sim.status] || "dot-yellow")}
+                            />
                           ) : entry.icon ? (
-                            <entry.icon className="w-4 h-4 shrink-0 text-white/30" />
+                            <entry.icon aria-hidden="true" className="w-4 h-4 shrink-0 text-white/30" />
                           ) : null}
                           <div className="flex-1 min-w-0">
                             <div className="text-xs font-medium truncate">{entry.label}</div>

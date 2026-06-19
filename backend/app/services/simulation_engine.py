@@ -190,6 +190,9 @@ class CustomerAgent(Agent):
         churn_rate = variables.get("churn_rate", 5) / 100
         # Risk-averse customers (low risk_tolerance) churn more readily.
         churn_rate *= (1 + (0.5 - self.risk_tolerance) * 0.4)
+        # Contagion: churn pressure from neighboring segments (0.0 when off, so
+        # this collapses to a 1.0 multiplier and is byte-identical to legacy).
+        churn_rate *= (1 + self.state.get("churn_pressure", 0.0))
         churned = int(self.state["acquired"] * churn_rate * self.rng.gauss(1.0, 0.15))
 
         self.state["acquired"] = max(0, self.state["acquired"] + new_customers - churned)
@@ -511,7 +514,6 @@ class SupplyChainAgent(Agent):
           - sensitivity -> stress response to demand spikes (existing)
         """
         demand_growth = market_state.get("month_growth", 0)
-        month = market_state.get("month", 1)
 
         # Demand spikes stress the supply chain
         if demand_growth > 0.15:
@@ -557,9 +559,7 @@ class EmployeeAgent(Agent):
         """Persona mapping:
           - sensitivity -> morale impact under headcount pressure (existing)
         """
-        revenue = market_state.get("revenue", 0)
         customers = market_state.get("total_customers", 0)
-        month = market_state.get("month", 1)
 
         # Hiring need scales with customer growth
         target_headcount = max(self.state["headcount"], int(customers / 50) + 5)
@@ -661,6 +661,158 @@ class SimulationEngine:
                 agents.append(EmployeeAgent(agent_cfg.count, agent_cfg.sensitivity, rng=rng, params=params))
         return agents
 
+    # ── Network-effects / contagion ──────────────────────────────────────
+    # Threshold (absolute nudge magnitude) above which an agent is counted as
+    # "affected" in a step. A step is a cascade event when >= 2 agents cross it.
+    _CONTAGION_THRESHOLD = 0.05
+    # Per-hop decay applied to the propagated signal; keeps cascades bounded.
+    _CONTAGION_DECAY = 0.7
+
+    def _build_influence_matrix(self, agents: List["Agent"], rng: random.Random):
+        """Build the inter-agent influence matrix W (only when contagion is on).
+
+        W[i][j] = how much agent j's last action nudges agent i next step.
+        Seeded from each source agent's ``influence_weight`` (a high-influence
+        agent affects neighbors more) plus a same-type-affinity term and a weak
+        global coupling. Entries are bounded to [-1, 1] with a zero diagonal.
+
+        Determinism: the small jitter is drawn from the path ``rng`` so a seeded
+        run stays reproducible. This is ONLY called when ``enable_contagion`` is
+        True, so disabled runs draw no extra rng.
+
+        Knowledge-graph seeding (cheap): ``influence_weight`` already carries the
+        graph-derived influence (set by ``to_monte_carlo_config``), so W is built
+        purely from data on the agents — no Firestore fetch in the hot loop.
+        """
+        n = len(agents)
+        W = np.zeros((n, n), dtype=float)
+        if n < 2:
+            return W
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    continue
+                src = agents[j]
+                # Higher influence_weight source -> stronger outgoing effect.
+                base = 0.1 + 0.5 * float(getattr(src, "influence_weight", 0.5))
+                # Same-type agents couple more strongly (segment affinity).
+                affinity = 0.5 if agents[i].type == src.type else 0.2
+                jitter = rng.uniform(-0.05, 0.05)
+                W[i][j] = max(-1.0, min(1.0, base * affinity + jitter))
+        return W
+
+    @staticmethod
+    def _agent_signal(agent: "Agent", result: Dict[str, Any]) -> float:
+        """Map an agent's last react() result to a scalar contagion signal in
+        roughly [-1, 1]. Positive = expansionary/healthy, negative = stress."""
+        t = agent.type
+        if t == "customer":
+            new_c = result.get("new_customers", 0)
+            churned = result.get("churned", 0)
+            denom = max(new_c + churned, 1)
+            return max(-1.0, min(1.0, (new_c - churned) / denom))
+        if t == "competitor":
+            # Stronger competitor => negative pressure on neighbors.
+            return -max(-1.0, min(1.0, (result.get("strength", 50) - 50) / 50.0))
+        if t == "investor":
+            return 1.0 if result.get("funding", 0) > 0 else 0.0
+        if t == "market":
+            return max(-1.0, min(1.0, result.get("trend_multiplier", 1.0) - 1.0))
+        if t == "trader":
+            act = result.get("action", "hold")
+            return 0.5 if act == "buy" else (-0.5 if act == "sell" else 0.0)
+        if t == "market_maker":
+            return -max(-1.0, min(1.0, (result.get("spread", 0.5) - 0.5)))
+        if t == "molecule":
+            return 0.5 if result.get("bound") else -0.2
+        if t == "enzyme":
+            return 0.3 if result.get("active") else -0.5
+        if t == "data_stream":
+            return max(-1.0, min(1.0, result.get("signal", 0.0)))
+        if t == "supply_chain":
+            return -0.5 if result.get("disrupted") else 0.1
+        if t == "employee":
+            return max(-1.0, min(1.0, result.get("morale", 0.75) - 0.75))
+        return 0.0
+
+    def _propagate_contagion(
+        self,
+        agents: List["Agent"],
+        W,
+        last_signals: List[float],
+        strength: float,
+    ) -> tuple:
+        """Run ONE bounded, decayed, clamped propagation pass over the agents.
+
+        For each agent i the incoming nudge is::
+
+            nudge_i = clamp( strength * decay * sum_j W[i][j] * signal_j )
+
+        The nudge is applied to a small, well-defined part of each agent's
+        state (documented per type below). Returns ``(affected_count, nudges)``
+        where ``affected_count`` is how many agents received a nudge whose
+        magnitude exceeded ``_CONTAGION_THRESHOLD``.
+
+        Nudge mapping per agent type (applied to state, bounded):
+          - customer:    negative nudge raises churn pressure next step
+                         (``churn_pressure`` accumulator, clamped [-0.5, 0.5]).
+          - competitor:  nudge adjusts ``strength`` (adjacent competitors pile on).
+          - investor:    positive nudge raises ``interest``.
+          - market:      nudge shifts ``trend`` (sentiment contagion).
+          - trader:      nudge shifts ``position`` (herding).
+          - market_maker:negative nudge widens ``spread`` (stress contagion).
+          - molecule:    positive nudge biases ``energy`` lower (cooperative binding).
+          - enzyme:      nudge scales ``catalytic_rate`` (allosteric coupling).
+          - data_stream: nudge shifts ``trend`` (correlated signals).
+          - supply_chain:negative nudge lowers ``reliability`` (shared shocks).
+          - employee:    nudge shifts ``morale`` (culture contagion).
+        Types without a meaningful mapping are a no-op (never crash).
+        """
+        n = len(agents)
+        affected = 0
+        nudges = [0.0] * n
+        if n < 2:
+            return affected, nudges
+        sig = np.asarray(last_signals, dtype=float)
+        # Vectorized incoming influence, then decayed + clamped per agent.
+        raw = W.dot(sig)
+        for i in range(n):
+            nudge = strength * self._CONTAGION_DECAY * float(raw[i])
+            # Clamp so a single step's nudge can never run away.
+            nudge = max(-1.0, min(1.0, nudge))
+            nudges[i] = nudge
+            if abs(nudge) > self._CONTAGION_THRESHOLD:
+                affected += 1
+            agent = agents[i]
+            st = agent.state
+            t = agent.type
+            if t == "customer":
+                # Neighboring churn (negative nudge) raises churn pressure.
+                cp = float(st.get("churn_pressure", 0.0)) - nudge * 0.1
+                st["churn_pressure"] = max(-0.5, min(0.5, cp))
+            elif t == "competitor":
+                st["strength"] = max(0.0, min(100.0, st.get("strength", 50.0) + nudge * 5.0))
+            elif t == "investor":
+                st["interest"] = max(0.0, min(100.0, st.get("interest", 0.0) + nudge * 5.0))
+            elif t == "market":
+                st["trend"] = max(-0.5, min(0.5, st.get("trend", 0.0) + nudge * 0.02))
+            elif t == "trader":
+                st["position"] = max(0, st.get("position", 0) + int(round(nudge * 2)))
+            elif t == "market_maker":
+                st["spread"] = max(0.1, min(10.0, st.get("spread", 0.5) - nudge * 0.1))
+            elif t == "molecule":
+                st["energy"] = st.get("energy", 0.0) - nudge * 0.5
+            elif t == "enzyme":
+                st["catalytic_rate"] = max(0.0, st.get("catalytic_rate", 100.0) * (1 + nudge * 0.1))
+            elif t == "data_stream":
+                st["trend"] = st.get("trend", 0.0) + nudge * 0.001
+            elif t == "supply_chain":
+                st["reliability"] = max(0.0, min(1.0, st.get("reliability", 0.85) + nudge * 0.05))
+            elif t == "employee":
+                st["morale"] = max(0.0, min(1.0, st.get("morale", 0.75) + nudge * 0.05))
+            # else: no meaningful coupling — no-op (never crash).
+        return affected, nudges
+
     def _run_single(
         self,
         variables: Optional[Dict] = None,
@@ -746,10 +898,48 @@ class SimulationEngine:
                     return float(vars_[vk])
         return default
 
+    def _contagion_setup(self, agents: List["Agent"], rng: random.Random):
+        """Return ``(W, strength, state)`` when contagion is enabled, else
+        ``(None, 0.0, None)``. The state dict accumulates per-path metrics.
+
+        CRITICAL: returns immediately without touching ``rng`` when contagion is
+        disabled, guaranteeing byte-identical behavior with the legacy engine.
+        """
+        if not getattr(self.config, "enable_contagion", False):
+            return None, 0.0, None
+        strength = float(getattr(self.config, "contagion_strength", 0.3))
+        W = self._build_influence_matrix(agents, rng)
+        state = {"cascade_events": 0, "max_reach": 0.0, "n": len(agents)}
+        return W, strength, state
+
+    def _contagion_step(self, agents, W, strength, state, last_signals) -> None:
+        """Apply one propagation pass and update per-path cascade metrics.
+        No-op when contagion is disabled (``W is None``)."""
+        if W is None or state is None or state["n"] < 2:
+            return
+        affected, _ = self._propagate_contagion(agents, W, last_signals, strength)
+        if affected >= 2:
+            state["cascade_events"] += 1
+        reach = affected / max(state["n"], 1)
+        if reach > state["max_reach"]:
+            state["max_reach"] = reach
+
+    @staticmethod
+    def _contagion_metrics(state) -> Dict[str, float]:
+        """Per-path metrics dict folded into the result (defaults when off)."""
+        if state is None:
+            return {"cascade_events": 0, "max_contagion_reach": 0.0, "contagion_ran": False}
+        return {
+            "cascade_events": state["cascade_events"],
+            "max_contagion_reach": state["max_reach"],
+            "contagion_ran": True,
+        }
+
     def _run_business(self, vars_: Dict, rng: random.Random,
                       event_sink: Optional["EventSink"] = None) -> Dict[str, Any]:
         """Run a business/startup simulation. Works with AI-generated variable names."""
         agents = self._create_agents(rng)
+        W, c_strength, c_state = self._contagion_setup(agents, rng)
 
         # Flexibly find key variables — AI may name them differently
         budget = self._find_var(vars_, "budget", "monthly_budget", "monthly_burn", "burn_rate", "monthly_burn_rate", default=50000)
@@ -782,8 +972,11 @@ class SimulationEngine:
             if event_sink is not None:
                 event_sink.start_tick()
 
-            for agent in agents:
+            signals = [0.0] * len(agents) if c_state is not None else None
+            for ai, agent in enumerate(agents):
                 result = agent.react(market_state, vars_)
+                if signals is not None:
+                    signals[ai] = self._agent_signal(agent, result)
                 if event_sink is not None:
                     action, value, note = self._event_for(agent, result)
                     event_sink.record(agent.agent_id, agent.type, action, value,
@@ -802,6 +995,9 @@ class SimulationEngine:
                     supply_cost_impact += result.get("cost_impact", 0)
                 elif agent.type == "employee":
                     productivity_multiplier = result.get("productivity_multiplier", 1.0)
+
+            if signals is not None:
+                self._contagion_step(agents, W, c_strength, c_state, signals)
 
             total_funding += new_funding
             budget += new_funding
@@ -842,12 +1038,14 @@ class SimulationEngine:
             "final_market_share": timeline[-1]["market_share"] if timeline else 0,
             "months_survived": final_month,
             "timeline": timeline,
+            **self._contagion_metrics(c_state),
         }
 
     def _run_finance(self, vars_: Dict, rng: random.Random,
                      event_sink: Optional["EventSink"] = None) -> Dict[str, Any]:
         """Run a financial markets simulation."""
         agents = self._create_agents(rng)
+        W, c_strength, c_state = self._contagion_setup(agents, rng)
         portfolio_value = self._find_var(vars_, "portfolio_value", "starting_capital", "initial_capital", "capital", default=100000)
         # Cap trading_days: use time_horizon * ~21 trading days/month, max 252
         default_days = min(252, self.config.time_horizon * 21)
@@ -882,8 +1080,11 @@ class SimulationEngine:
             spread = 0.5
             if event_sink is not None:
                 event_sink.start_tick()
-            for agent in agents:
+            signals = [0.0] * len(agents) if c_state is not None else None
+            for ai, agent in enumerate(agents):
                 result = agent.react(market_state, vars_)
+                if signals is not None:
+                    signals[ai] = self._agent_signal(agent, result)
                 if event_sink is not None:
                     action, value, note = self._event_for(agent, result)
                     event_sink.record(agent.agent_id, agent.type, action, value,
@@ -892,6 +1093,9 @@ class SimulationEngine:
                     total_pnl += result.get("pnl", 0)
                 elif agent.type == "market_maker":
                     spread = result.get("spread", 0.5)
+
+            if signals is not None:
+                self._contagion_step(agents, W, c_strength, c_state, signals)
 
             portfolio_value = initial_value + total_pnl
 
@@ -926,12 +1130,14 @@ class SimulationEngine:
             "final_market_share": round(growth * 100, 4),
             "months_survived": len(timeline),
             "timeline": timeline if timeline else [{"month": 1, "revenue": 0, "customers": 0, "market_share": 0, "competitor_strength": 50, "budget": portfolio_value}],
+            **self._contagion_metrics(c_state),
         }
 
     def _run_biology(self, vars_: Dict, rng: random.Random,
                      event_sink: Optional["EventSink"] = None) -> Dict[str, Any]:
         """Run a molecular biology simulation."""
         agents = self._create_agents(rng)
+        W, c_strength, c_state = self._contagion_setup(agents, rng)
         num_molecules = int(self._find_var(vars_, "num_molecules", "molecule_count", "number_of_molecules", default=128))
         sim_steps = int(self._find_var(vars_, "sim_steps", "simulation_steps", "total_steps", default=1000))
         sim_steps = min(sim_steps, 2000)  # Hard cap
@@ -951,8 +1157,11 @@ class SimulationEngine:
             if capture:
                 event_sink.start_tick()
 
-            for agent in agents:
+            signals = [0.0] * len(agents) if c_state is not None else None
+            for ai, agent in enumerate(agents):
                 result = agent.react(market_state, vars_)
+                if signals is not None:
+                    signals[ai] = self._agent_signal(agent, result)
                 if capture:
                     action, value, note = self._event_for(agent, result)
                     event_sink.record(agent.agent_id, agent.type, action, value,
@@ -962,6 +1171,9 @@ class SimulationEngine:
                         bound_count += 1
                 elif agent.type == "enzyme":
                     processed += result.get("processed", 0)
+
+            if signals is not None:
+                self._contagion_step(agents, W, c_strength, c_state, signals)
 
             total_bound = bound_count
             total_processed = processed
@@ -994,12 +1206,14 @@ class SimulationEngine:
             "final_market_share": round(final_binding_rate * 100, 4),
             "months_survived": len(timeline),
             "timeline": timeline if timeline else [{"month": 1, "revenue": 0, "customers": 0, "market_share": 0, "competitor_strength": 0, "budget": 0}],
+            **self._contagion_metrics(c_state),
         }
 
     def _run_trend(self, vars_: Dict, rng: random.Random,
                    event_sink: Optional["EventSink"] = None) -> Dict[str, Any]:
         """Run a trend analysis simulation."""
         agents = self._create_agents(rng)
+        W, c_strength, c_state = self._contagion_setup(agents, rng)
         forecast_periods = int(self._find_var(vars_, "forecast_periods", "forecast_horizon", "prediction_periods", default=self.config.time_horizon * 2))
         forecast_periods = min(forecast_periods, 120)  # Hard cap
         confidence_level = self._find_var(vars_, "confidence_level", "confidence_threshold", default=95) / 100
@@ -1020,8 +1234,11 @@ class SimulationEngine:
             if capture:
                 event_sink.start_tick()
 
-            for agent in agents:
+            c_signals = [0.0] * len(agents) if c_state is not None else None
+            for ai, agent in enumerate(agents):
                 result = agent.react(market_state, vars_)
+                if c_signals is not None:
+                    c_signals[ai] = self._agent_signal(agent, result)
                 if capture:
                     action, value, note = self._event_for(agent, result)
                     event_sink.record(agent.agent_id, agent.type, action, value,
@@ -1033,6 +1250,9 @@ class SimulationEngine:
                 elif agent.type == "market":
                     market_mult = result.get("trend_multiplier", 1.0)
                     step_signal *= market_mult
+
+            if c_signals is not None:
+                self._contagion_step(agents, W, c_strength, c_state, c_signals)
 
             signals.append(step_signal)
             patterns_detected += step_patterns
@@ -1067,6 +1287,7 @@ class SimulationEngine:
             "final_market_share": round(accuracy * 100, 4),
             "months_survived": len(timeline),
             "timeline": timeline if timeline else [{"month": 1, "revenue": 0, "customers": 0, "market_share": 0, "competitor_strength": 0, "budget": 0}],
+            **self._contagion_metrics(c_state),
         }
 
     # Domain -> singular time unit for replay (e.g. "month", "day", "step").
@@ -1075,6 +1296,25 @@ class SimulationEngine:
         "biology": "step",
         "trend": "period",
     }
+
+    def run_single_path(
+        self,
+        path_index: int,
+        base_seed: int,
+        variable_overrides: Optional[Dict] = None,
+    ) -> Dict[str, Any]:
+        """Run ONE deterministic Monte Carlo path and return its raw per-path dict.
+
+        Drives path ``path_index`` with ``random.Random(base_seed + path_index)`` —
+        EXACTLY the RNG ``run()``'s mass loop uses for that path — so the returned
+        ``{success, final_revenue, final_customers, final_market_share,
+        months_survived, timeline}`` matches the path the full Monte Carlo would
+        produce. This is the public, side-effect-free building block the composite
+        engine uses to propagate uncertainty path-by-path. It does NOT attach an
+        event sink and does NOT mutate ``run()``'s behavior.
+        """
+        rng = random.Random(base_seed + path_index)
+        return self._run_single(variable_overrides, rng)
 
     def replay_path(
         self,
@@ -1140,6 +1380,24 @@ class SimulationEngine:
             if progress_callback:
                 await progress_callback(len(results), n)
 
+        return self._aggregate_results(results, base_seed)
+
+    def aggregate_paths(
+        self, results: List[Dict[str, Any]], base_seed: int
+    ) -> SimulationResults:
+        """Aggregate raw per-path dicts (from ``run_single_path``) into a
+        ``SimulationResults`` using the EXACT same statistics ``run()`` uses.
+
+        Public so the composite engine can collect per-path outputs node-by-node
+        (with cross-domain overrides applied per path) and fold them into a normal
+        ``SimulationResults`` without re-running the Monte Carlo.
+        """
+        return self._aggregate_results(results, base_seed)
+
+    def _aggregate_results(
+        self, results: List[Dict[str, Any]], base_seed: int
+    ) -> SimulationResults:
+        """Fold a list of per-path result dicts into a ``SimulationResults``."""
         # NumPy aggregation RNG seeded from the same base_seed for reproducibility.
         np_rng = np.random.default_rng(base_seed)
 
@@ -1154,7 +1412,12 @@ class SimulationEngine:
         avg_market_share = float(np.mean(market_shares))
 
         months_survived = [r["months_survived"] for r in results]
-        avg_breakeven = float(np.mean([m for m in months_survived if m > 0]))
+        # Guard against np.mean([]) -> NaN when no run survived a single period.
+        # A NaN here would poison downstream consumers (e.g. the Pareto optimizer's
+        # dominance/knee math) and serialize as invalid-JSON `NaN`. Treat
+        # "nobody broke even" as 0 (a finite, direction-consistent sentinel).
+        _survivors = [m for m in months_survived if m > 0]
+        avg_breakeven = float(np.mean(_survivors)) if _survivors else 0.0
 
         # Bootstrap confidence interval (95%) — much more accurate than arbitrary ±12%
         success_flags = [r["success"] for r in results]
@@ -1167,6 +1430,19 @@ class SimulationEngine:
 
         # ── Confidence diagnostics ──────────────────────────────────────
         diagnostics = self._compute_diagnostics(success_flags, ci_low, ci_high)
+
+        # ── Contagion / network-effects metrics ──────────────────────────
+        # Only populated when at least one path actually ran the contagion pass
+        # (i.e. enable_contagion was True). Defaults keep legacy results valid.
+        contagion_ran = any(r.get("contagion_ran") for r in results)
+        if contagion_ran:
+            cascade_counts = [r.get("cascade_events", 0) for r in results]
+            avg_cascade_events = float(np.mean(cascade_counts)) if cascade_counts else 0.0
+            reaches = [r.get("max_contagion_reach", 0.0) for r in results]
+            max_contagion_reach = float(max(reaches)) if reaches else 0.0
+        else:
+            avg_cascade_events = 0.0
+            max_contagion_reach = 0.0
 
         # Dynamic outcome distribution based on actual result data (not hardcoded ranges)
         category = self.config.category.value
@@ -1262,6 +1538,9 @@ class SimulationEngine:
             convergence_delta=diagnostics["convergence_delta"],
             converged=diagnostics["converged"],
             forecast_confidence=diagnostics["forecast_confidence"],
+            contagion_enabled=bool(contagion_ran),
+            avg_cascade_events=round(avg_cascade_events, 3),
+            max_contagion_reach=round(max_contagion_reach, 4),
         )
 
     def _compute_diagnostics(
@@ -1309,7 +1588,6 @@ class SimulationEngine:
     def _generate_risk_factors(self, results: List[Dict], success_prob: float) -> List[RiskFactor]:
         category = self.config.category.value
         failed = [r for r in results if not r["success"]]
-        fail_rate = len(failed) / max(len(results), 1)
         early_failures = [r for r in failed if r["months_survived"] < self.config.time_horizon * 0.5]
         early_fail_rate = len(early_failures) / max(len(results), 1)
 

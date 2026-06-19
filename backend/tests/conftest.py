@@ -123,6 +123,12 @@ def mock_firebase():
         patch("app.routers.public.query_collection", side_effect=mock_query_collection),
         # Insights router (narrative dashboard digest) reads sims via query_collection.
         patch("app.routers.insights.query_collection", side_effect=mock_query_collection),
+        # Composites router (cross-domain composite simulations).
+        patch("app.routers.composites.get_document", side_effect=mock_get_document),
+        patch("app.routers.composites.update_document", side_effect=mock_update_document),
+        patch("app.routers.composites.delete_document", side_effect=mock_delete_document),
+        patch("app.routers.composites.query_collection", side_effect=mock_query_collection),
+        patch("app.routers.composites.get_db", return_value=mock_db),
         # Demo router: claim persists an owner-scoped simulation via get_db
         # and dedupes by demo_id via query_collection.
         patch("app.routers.demo.get_db", return_value=mock_db),

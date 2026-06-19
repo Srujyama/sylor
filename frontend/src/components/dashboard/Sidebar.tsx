@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   LayoutDashboard, Plus, Layers, LayoutTemplate, BookOpen, Settings, LogOut,
-  BarChart3, Search, Network, FolderKanban, FileText, Sun, Moon,
+  BarChart3, Search, Network, FolderKanban, FileText, Sun, Moon, Boxes,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logOut } from "@/lib/firebase/auth";
@@ -14,6 +14,7 @@ const navItems = [
   { label: "dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "projects", href: "/projects", icon: FolderKanban },
   { label: "simulations", href: "/simulations", icon: Layers },
+  { label: "composites", href: "/composites", icon: Boxes },
   { label: "knowledge graphs", href: "/graphs", icon: Network },
   { label: "reports", href: "/reports", icon: FileText },
   { label: "analytics", href: "/analytics", icon: BarChart3 },

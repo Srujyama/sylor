@@ -421,13 +421,14 @@ function RunTrayUI() {
                   className="w-full text-left"
                 >
                   <div className="flex items-center gap-2 mb-1.5">
-                    <span className={cn("dot shrink-0", statusDot[run.status])} />
+                    <span aria-hidden="true" className={cn("dot shrink-0", statusDot[run.status])} />
+                    <span className="sr-only">{run.status}:</span>
                     <span className="text-xs text-white/70 truncate flex-1 group-hover:text-white transition-colors">
                       {run.name}
                     </span>
-                    {run.status === "running" && <Loader2 className="w-3 h-3 text-white/30 animate-spin shrink-0" />}
-                    {run.status === "completed" && <CheckCircle className="w-3 h-3 text-emerald-400 shrink-0" />}
-                    {run.status === "failed" && <XCircle className="w-3 h-3 text-red-400 shrink-0" />}
+                    {run.status === "running" && <Loader2 aria-hidden="true" className="w-3 h-3 text-white/30 animate-spin shrink-0" />}
+                    {run.status === "completed" && <CheckCircle aria-hidden="true" className="w-3 h-3 text-emerald-400 shrink-0" />}
+                    {run.status === "failed" && <XCircle aria-hidden="true" className="w-3 h-3 text-red-400 shrink-0" />}
                   </div>
                   <div className="progress-bar">
                     <div className="progress-fill" style={{ width: `${run.percent}%` }} />

@@ -296,6 +296,29 @@ class TestExtremeFinanceVolatility:
         assert 0 <= results.success_probability <= 100
 
 
+class TestNoSurvivorBreakevenIsFinite:
+    """When no run survives a single period, avg_breakeven_month must be a
+    finite sentinel (0.0), never NaN — a NaN here poisons the Pareto optimizer
+    and serializes as invalid JSON."""
+
+    @pytest.mark.asyncio
+    async def test_zero_trading_days_yields_finite_breakeven(self):
+        random.seed(42)
+        config = _make_config(
+            category="finance",
+            variables=[
+                SimulationVariable(name="portfolio_value", label="Capital", value=100_000),
+                SimulationVariable(name="trading_days", label="Days", value=0),
+                SimulationVariable(name="num_assets", label="Assets", value=3),
+            ],
+            agents=[AgentConfig(type="trader", name="T", count=2, sensitivity=0.7)],
+            num_runs=20,
+        )
+        results = await SimulationEngine(config).run()
+        assert math.isfinite(results.avg_breakeven_month)
+        assert results.avg_breakeven_month == 0.0
+
+
 # ---------------------------------------------------------------------------
 # Biology at extreme pH
 # ---------------------------------------------------------------------------

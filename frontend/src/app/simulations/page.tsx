@@ -4,12 +4,10 @@ export const dynamic = 'force-dynamic';
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Plus, Search, Loader2, ArrowRight, RotateCcw, Trash2, Copy, BarChart2,
 } from "lucide-react";
-import { listSimulations, duplicateSimulation as duplicateSimApi, deleteSimulation as deleteSimApi } from "@/lib/api";
+import { listSimulations, mapSimulation, duplicateSimulation as duplicateSimApi, deleteSimulation as deleteSimApi } from "@/lib/api";
 import { onAuthChange } from "@/lib/firebase/auth";
 import { useToast } from "@/components/ui/toast";
 import type { Simulation } from "@/types";
@@ -70,30 +68,7 @@ export default function SimulationsPage() {
     try {
       setError(null);
       const data = await listSimulations(userId);
-      const mapped: Simulation[] = data.map((s: any) => ({
-        id: s.id,
-        userId: s.user_id,
-        name: s.name,
-        description: s.description,
-        category: s.category,
-        config: s.config,
-        status: s.status,
-        results: s.results ? {
-          successProbability: s.results.success_probability,
-          confidenceInterval: s.results.confidence_interval,
-          avgRevenue: s.results.avg_revenue,
-          avgMarketShare: s.results.avg_market_share,
-          avgTimeToBreakeven: s.results.avg_breakeven_month,
-          riskFactors: s.results.risk_factors,
-          keyInsights: s.results.key_insights,
-          outcomeDistribution: s.results.outcome_distribution,
-          timelineAggregated: s.results.timeline_aggregated,
-          competitorReactions: s.results.competitor_reactions,
-        } : undefined,
-        createdAt: s.created_at,
-        updatedAt: s.updated_at,
-        runCount: s.run_count,
-      }));
+      const mapped: Simulation[] = data.map(mapSimulation);
       setSimulations(mapped.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()));
     } catch (err: any) {
       setError(err.message);

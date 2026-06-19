@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { cn, formatCurrency } from "@/lib/utils";
+import { formatCurrency } from "@/lib/utils";
 import { getReplay, getTranscript } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import type { ReplayData, AgentTranscript } from "@/types";
@@ -242,6 +242,8 @@ export function SimulationTheater({ simId }: { simId: string }) {
                         />
                       )}
                       <div
+                        role="img"
+                        aria-label={`${a.name} (${a.type})${active ? ", acting" : ""}`}
                         className="relative w-10 h-10 rounded-full border-2 flex items-center justify-center transition-all duration-200"
                         style={{
                           borderColor: color,
@@ -250,7 +252,7 @@ export function SimulationTheater({ simId }: { simId: string }) {
                           transform: active && !reduced ? "scale(1.12)" : "scale(1)",
                         }}
                       >
-                        <span className="text-[9px] font-bold" style={{ color: active ? "#0a0a0a" : color }}>
+                        <span aria-hidden="true" className="text-[9px] font-bold" style={{ color: active ? "#0a0a0a" : color }}>
                           {a.name.slice(0, 2).toUpperCase()}
                         </span>
                       </div>
@@ -265,11 +267,11 @@ export function SimulationTheater({ simId }: { simId: string }) {
             {/* Transport controls + scrubber */}
             <div className="mt-4 flex items-center gap-3">
               <Button variant="glass" size="sm" onClick={togglePlay}>
-                {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                {playing ? <Pause aria-hidden="true" className="w-4 h-4" /> : <Play aria-hidden="true" className="w-4 h-4" />}
                 {playing ? "pause" : cursor >= lastIdx ? "replay" : "play"}
               </Button>
-              <Button variant="ghost" size="icon" onClick={restart} title="restart">
-                <RotateCcw className="w-4 h-4" />
+              <Button variant="ghost" size="icon" onClick={restart} title="restart" aria-label="restart">
+                <RotateCcw aria-hidden="true" className="w-4 h-4" />
               </Button>
               <input
                 type="range"

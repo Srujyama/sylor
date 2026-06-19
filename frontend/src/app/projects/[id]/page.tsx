@@ -7,7 +7,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, Upload, Network, Users, Play, FileText, MessageSquare,
-  Loader2, CheckCircle, XCircle, Clock, ChevronRight,
+  Loader2, CheckCircle, ChevronRight,
 } from "lucide-react";
 import {
   getProject, uploadDocuments, buildKnowledgeGraph, generateProfiles,
