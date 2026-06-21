@@ -155,6 +155,7 @@ function CausalCanvas({
   const svgRef = useRef<SVGSVGElement>(null);
   const [viewBox, setViewBox] = useState(layout.bounds);
   const [hoveredUuid, setHoveredUuid] = useState<string | null>(null);
+  const [focusedUuid, setFocusedUuid] = useState<string | null>(null);
   const dragRef = useRef<{ startX: number; startY: number; vb: typeof layout.bounds; moved: boolean } | null>(null);
 
   useEffect(() => { setViewBox(layout.bounds); }, [layout]);
@@ -267,6 +268,7 @@ function CausalCanvas({
         {layout.nodes.map((ln) => {
           const isSelected = ln.node.uuid === selectedUuid;
           const isHovered = ln.node.uuid === hoveredUuid;
+          const isFocused = ln.node.uuid === focusedUuid;
           const eStroke = effectStroke(ln.node.uuid);
           const ch = effectByUuid.get(ln.node.uuid);
           const effected = eStroke != null;
@@ -274,6 +276,18 @@ function CausalCanvas({
           const ringW = effected ? Math.max(1.5, viewBox.w / 400) * (0.5 + Math.abs(ch || 0)) : 0;
           return (
             <g key={ln.node.uuid} opacity={dim ? 0.3 : 1}>
+              {/* keyboard focus ring — explicit (SVG default focus outlines are unreliable) */}
+              {isFocused && (
+                <circle
+                  cx={ln.x} cy={ln.y}
+                  r={ln.r + 4}
+                  fill="none"
+                  stroke="#a78bfa"
+                  strokeWidth={Math.max(1.5, viewBox.w / 350)}
+                  strokeOpacity={0.95}
+                  className="pointer-events-none"
+                />
+              )}
               {/* effect halo ring */}
               {effected && (
                 <circle
@@ -295,18 +309,31 @@ function CausalCanvas({
               <circle
                 cx={ln.x}
                 cy={ln.y}
-                r={ln.r * (isSelected || isHovered ? 1.3 : 1)}
+                r={ln.r * (isSelected || isHovered || isFocused ? 1.3 : 1)}
                 fill={ln.color}
-                fillOpacity={isSelected || isHovered ? 0.95 : 0.75}
+                fillOpacity={isSelected || isHovered || isFocused ? 0.95 : 0.75}
                 stroke={isSelected ? "#ffffff" : "rgba(255,255,255,0.2)"}
                 strokeWidth={isSelected ? Math.max(1, viewBox.w / 500) : Math.max(0.5, viewBox.w / 1500)}
-                className="cursor-pointer"
+                className="cursor-pointer focus:outline-none"
+                tabIndex={0}
+                role="button"
+                aria-label={`select node ${ln.node.name}`}
+                aria-pressed={isSelected}
                 onMouseEnter={() => setHoveredUuid(ln.node.uuid)}
                 onMouseLeave={() => setHoveredUuid(null)}
+                onFocus={() => setFocusedUuid(ln.node.uuid)}
+                onBlur={() => setFocusedUuid(null)}
                 onClick={(ev) => {
                   ev.stopPropagation();
                   if (dragRef.current?.moved) return;
                   onSelect(ln.node);
+                }}
+                onKeyDown={(ev) => {
+                  if (ev.key === "Enter" || ev.key === " ") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    onSelect(ln.node);
+                  }
                 }}
               />
               <text
@@ -314,7 +341,7 @@ function CausalCanvas({
                 y={ln.y - ln.r - fontSize * 0.5}
                 textAnchor="middle"
                 fontSize={fontSize}
-                fill={isSelected || isHovered ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.5)"}
+                fill={isSelected || isHovered || isFocused ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.5)"}
                 className="pointer-events-none"
               >
                 {ln.node.name}

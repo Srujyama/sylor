@@ -19,6 +19,7 @@ import {
 import { onAuthChange } from "@/lib/firebase/auth";
 import { useToast } from "@/components/ui/toast";
 import { CATEGORY_COLOR, FROM_METRICS } from "@/lib/composite-templates";
+import { ChartDataTable } from "@/components/ui/chart-data-table";
 import type {
   CompositeDetail, CompositeRunResult, CompositeNode,
 } from "@/types";
@@ -428,6 +429,7 @@ export default function CompositeDetailPage({ params }: { params: { id: string }
                       </div>
                     </div>
                     {chartData.length > 0 && (
+                      <div role="img" aria-label={`Bar chart: outcome distribution for ${nodeResult.label} — probability of runs by outcome range`}>
                       <ResponsiveContainer width="100%" height={120}>
                         <BarChart data={chartData} margin={{ top: 4, right: 4, left: -28, bottom: 0 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
@@ -444,6 +446,16 @@ export default function CompositeDetailPage({ params }: { params: { id: string }
                           </Bar>
                         </BarChart>
                       </ResponsiveContainer>
+                      <ChartDataTable
+                        caption={`Outcome distribution for ${nodeResult.label}: probability of runs by outcome range`}
+                        data={chartData}
+                        columns={[
+                          { key: "outcome range", value: (row) => row.range },
+                          { key: "probability (% of runs)", value: (row) => row.probability },
+                          { key: "count", value: (row) => row.count },
+                        ]}
+                      />
+                      </div>
                     )}
                   </div>
                 );

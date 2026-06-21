@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Command, X } from "lucide-react";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 
 // Shortcuts shown in the cheat sheet. Chords ("g d") are listed as two keys.
 const SHORTCUTS: Array<{ keys: string[]; label: string }> = [
@@ -29,6 +30,7 @@ function isEditableTarget(el: EventTarget | null): boolean {
 export function GlobalHotkeys() {
   const router = useRouter();
   const [cheatOpen, setCheatOpen] = useState(false);
+  const dialogRef = useFocusTrap<HTMLDivElement>(cheatOpen);
   // Tracks a pending "g" chord prefix and when it expires.
   const chordPrefix = useRef<string | null>(null);
   const chordTimer = useRef<NodeJS.Timeout | null>(null);
@@ -103,6 +105,10 @@ export function GlobalHotkeys() {
 
       {/* Dialog */}
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cheat-sheet-title"
         className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm"
         onClick={(e) => e.stopPropagation()}
       >
@@ -110,7 +116,7 @@ export function GlobalHotkeys() {
           {/* Header */}
           <div className="flex items-center gap-2 px-4 py-3 border-b border-white/[0.06]">
             <Command className="w-3.5 h-3.5 text-white/30" />
-            <span className="text-xs font-medium text-white/70 tracking-wide">keyboard shortcuts</span>
+            <span id="cheat-sheet-title" className="text-xs font-medium text-white/70 tracking-wide">keyboard shortcuts</span>
             <button
               onClick={() => setCheatOpen(false)}
               className="ml-auto text-white/25 hover:text-white/60 transition-colors"

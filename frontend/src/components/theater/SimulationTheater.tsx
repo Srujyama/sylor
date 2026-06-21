@@ -14,6 +14,7 @@ import type { ReplayData, AgentTranscript } from "@/types";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
+import { ChartDataTable } from "@/components/ui/chart-data-table";
 
 // Color language by agent type — mirrors the domain dot/chart palette.
 const AGENT_COLORS: Record<string, string> = {
@@ -346,6 +347,7 @@ export function SimulationTheater({ simId }: { simId: string }) {
           </CardTitle>
         </CardHeader>
         <CardContent>
+          <div role="img" aria-label={`Area chart: revenue per ${replay.time_unit || "tick"} as the simulation path unfolds`}>
           <ResponsiveContainer width="100%" height={220}>
             <AreaChart data={chartData} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
               <defs>
@@ -364,6 +366,15 @@ export function SimulationTheater({ simId }: { simId: string }) {
               <Area type="monotone" dataKey="revenue" stroke="#06b6d4" strokeWidth={2} fill="url(#theaterRev)" isAnimationActive={!reduced} />
             </AreaChart>
           </ResponsiveContainer>
+          <ChartDataTable
+            caption={`Revenue per ${replay.time_unit || "tick"} as the simulation path unfolds`}
+            data={chartData}
+            columns={[
+              { key: replay.time_unit || "tick", value: (row) => row.t },
+              { key: "revenue", value: (row) => row.revenue },
+            ]}
+          />
+          </div>
         </CardContent>
       </Card>
 

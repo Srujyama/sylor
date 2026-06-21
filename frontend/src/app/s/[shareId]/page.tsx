@@ -12,6 +12,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell,
 } from "recharts";
+import { ChartDataTable } from "@/components/ui/chart-data-table";
 
 const OUTCOME_COLORS = ["#ef4444", "#f97316", "#eab308", "#84cc16", "#22c55e", "#06b6d4"];
 
@@ -120,6 +121,7 @@ export default function SharedSimulationPage({ params }: { params: { shareId: st
           <div className="text-xs text-white/25 mb-5 tracking-widest uppercase flex items-center gap-2">
             <TrendingUp className="w-3.5 h-3.5" /> {primaryLabel} projection — p10 / median / p90
           </div>
+          <div role="img" aria-label={`Area chart: ${primaryLabel} projection over months, showing p10 (worst 10%), p50 (median), and p90 (best 10%)`}>
           <ResponsiveContainer width="100%" height={260}>
             <AreaChart data={timeline} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
               <defs>
@@ -144,6 +146,17 @@ export default function SharedSimulationPage({ params }: { params: { shareId: st
               <Area type="monotone" dataKey="p10" stroke="#ef4444" strokeWidth={1.5} fill="none" strokeDasharray="4 2" />
             </AreaChart>
           </ResponsiveContainer>
+          <ChartDataTable
+            caption={`${primaryLabel} projection by month — p10 (worst 10%), p50 (median), p90 (best 10%)`}
+            data={timeline}
+            columns={[
+              { key: "month", value: (r) => r.month },
+              { key: "p10 (worst 10%)", value: (r) => r.p10 },
+              { key: "p50 (median)", value: (r) => r.p50 },
+              { key: "p90 (best 10%)", value: (r) => r.p90 },
+            ]}
+          />
+          </div>
           <div className="flex gap-6 mt-3 justify-center text-[10px] text-white/30">
             <div className="flex items-center gap-1.5"><div className="w-5 h-0.5 border-t-2 border-dashed border-violet-500" />best 10%</div>
             <div className="flex items-center gap-1.5"><div className="w-5 h-0.5 bg-cyan-500" />median</div>
@@ -158,6 +171,7 @@ export default function SharedSimulationPage({ params }: { params: { shareId: st
           <div className="text-xs text-white/25 mb-5 tracking-widest uppercase flex items-center gap-2">
             <BarChart3 className="w-3.5 h-3.5" /> outcome distribution
           </div>
+          <div role="img" aria-label="Bar chart: outcome distribution — probability of each outcome range">
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={distribution} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
@@ -174,6 +188,15 @@ export default function SharedSimulationPage({ params }: { params: { shareId: st
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+          <ChartDataTable
+            caption="Outcome distribution — probability of each outcome range"
+            data={distribution}
+            columns={[
+              { key: "outcome range", value: (r) => r.range },
+              { key: "probability (%)", value: (r) => r.probability },
+            ]}
+          />
+          </div>
         </div>
       )}
 

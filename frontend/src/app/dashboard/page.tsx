@@ -20,6 +20,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell,
 } from "recharts";
+import { ChartDataTable } from "@/components/ui/chart-data-table";
 import type { Simulation, DashboardDigest, DigestItem } from "@/types";
 
 const LAST_SEEN_KEY = "sylor-last-seen";
@@ -403,6 +404,7 @@ export default function DashboardPage() {
         <div className="bg-[var(--page-bg)] p-5 lg:col-span-2">
           <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">simulations by category</div>
           {categoryData.length > 0 ? (
+            <div role="img" aria-label="Bar chart: number of simulations by category">
             <ResponsiveContainer width="100%" height={180}>
               <BarChart data={categoryData} margin={{ top: 5, right: 0, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
@@ -427,6 +429,15 @@ export default function DashboardPage() {
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
+            <ChartDataTable
+              caption="Simulations by category"
+              data={categoryData}
+              columns={[
+                { key: "category", value: (row) => row.category },
+                { key: "simulations", value: (row) => row.count },
+              ]}
+            />
+            </div>
           ) : (
             <div className="flex items-center justify-center h-[180px] text-xs text-white/20">
               {loading ? (

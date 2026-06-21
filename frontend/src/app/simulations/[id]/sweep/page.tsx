@@ -30,6 +30,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { ChartDataTable } from "@/components/ui/chart-data-table";
 
 interface SweepPoint {
   value: number;
@@ -461,6 +462,7 @@ export default function SweepPage({ params }: { params: { id: string } }) {
                   success probability vs {selectedVariable}
                 </span>
               </div>
+              <div role="img" aria-label={`Line chart: success probability versus ${selectedVariable}`}>
               <ResponsiveContainer width="100%" height={260}>
                 <LineChart
                   data={sweepResults}
@@ -511,6 +513,15 @@ export default function SweepPage({ params }: { params: { id: string } }) {
                   />
                 </LineChart>
               </ResponsiveContainer>
+              <ChartDataTable
+                caption={`Success probability versus ${selectedVariable}`}
+                data={sweepResults}
+                columns={[
+                  { key: selectedVariable, value: (row) => row.value },
+                  { key: "success probability (%)", value: (row) => row.success_probability },
+                ]}
+              />
+              </div>
             </div>
 
             {/* Revenue area chart */}
@@ -521,6 +532,7 @@ export default function SweepPage({ params }: { params: { id: string } }) {
                   avg revenue vs {selectedVariable}
                 </span>
               </div>
+              <div role="img" aria-label={`Area chart: average revenue versus ${selectedVariable}`}>
               <ResponsiveContainer width="100%" height={260}>
                 <AreaChart
                   data={sweepResults}
@@ -587,6 +599,15 @@ export default function SweepPage({ params }: { params: { id: string } }) {
                   />
                 </AreaChart>
               </ResponsiveContainer>
+              <ChartDataTable
+                caption={`Average revenue versus ${selectedVariable}`}
+                data={sweepResults}
+                columns={[
+                  { key: selectedVariable, value: (row) => row.value },
+                  { key: "avg revenue", value: (row) => row.avg_revenue },
+                ]}
+              />
+              </div>
             </div>
           </div>
 

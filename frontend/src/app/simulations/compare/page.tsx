@@ -29,6 +29,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
+import { ChartDataTable } from "@/components/ui/chart-data-table";
 
 const categoryColors: Record<string, string> = {
   startup: "rgba(139,92,246,0.7)",
@@ -440,6 +441,7 @@ export default function ComparisonPage() {
               success probability
             </span>
           </div>
+          <div role="img" aria-label="Bar chart: success probability by simulation">
           <ResponsiveContainer width="100%" height={220}>
             <BarChart
               data={successChartData}
@@ -478,6 +480,15 @@ export default function ComparisonPage() {
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+          <ChartDataTable
+            caption="Success probability by simulation"
+            data={successChartData}
+            columns={[
+              { key: "simulation", value: (row) => row.name },
+              { key: "success probability (%)", value: (row) => row.success },
+            ]}
+          />
+          </div>
         </div>
 
         {/* Revenue bar chart */}
@@ -488,6 +499,7 @@ export default function ComparisonPage() {
               avg revenue
             </span>
           </div>
+          <div role="img" aria-label="Bar chart: average revenue by simulation">
           <ResponsiveContainer width="100%" height={220}>
             <BarChart
               data={revenueChartData}
@@ -525,6 +537,15 @@ export default function ComparisonPage() {
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+          <ChartDataTable
+            caption="Average revenue by simulation"
+            data={revenueChartData}
+            columns={[
+              { key: "simulation", value: (row) => row.name },
+              { key: "avg revenue", value: (row) => row.revenue },
+            ]}
+          />
+          </div>
         </div>
       </div>
 

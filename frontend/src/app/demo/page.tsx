@@ -17,6 +17,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell,
 } from "recharts";
+import { ChartDataTable } from "@/components/ui/chart-data-table";
 
 const OUTCOME_COLORS = ["#ef4444", "#f97316", "#eab308", "#84cc16", "#22c55e", "#06b6d4"];
 
@@ -234,6 +235,7 @@ export default function DemoPage() {
               <div className="text-xs text-white/25 mb-5 tracking-widest uppercase flex items-center gap-2">
                 <TrendingUp className="w-3.5 h-3.5" /> revenue projection — p10 / median / p90
               </div>
+              <div role="img" aria-label="Area chart: revenue projection over months, showing p10 (worst 10%), p50 (median), and p90 (best 10%)">
               <ResponsiveContainer width="100%" height={260}>
                 <AreaChart data={timeline} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <defs>
@@ -258,6 +260,17 @@ export default function DemoPage() {
                   <Area type="monotone" dataKey="p10" stroke="#ef4444" strokeWidth={1.5} fill="none" strokeDasharray="4 2" />
                 </AreaChart>
               </ResponsiveContainer>
+              <ChartDataTable
+                caption="Revenue projection by month (p10, median, p90)"
+                data={timeline}
+                columns={[
+                  { key: "month", value: (row: any) => row.month },
+                  { key: "p10 (worst 10%)", value: (row: any) => row.p10 },
+                  { key: "p50 (median)", value: (row: any) => row.p50 },
+                  { key: "p90 (best 10%)", value: (row: any) => row.p90 },
+                ]}
+              />
+              </div>
             </div>
           )}
 
@@ -267,6 +280,7 @@ export default function DemoPage() {
               <div className="text-xs text-white/25 mb-5 tracking-widest uppercase flex items-center gap-2">
                 <BarChart3 className="w-3.5 h-3.5" /> outcome distribution
               </div>
+              <div role="img" aria-label="Bar chart: outcome distribution showing probability percentage per revenue range">
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={distribution} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
@@ -283,6 +297,15 @@ export default function DemoPage() {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
+              <ChartDataTable
+                caption="Outcome distribution: probability by revenue range"
+                data={distribution}
+                columns={[
+                  { key: "range", value: (row: any) => row.range },
+                  { key: "probability %", value: (row: any) => row.probability },
+                ]}
+              />
+              </div>
             </div>
           )}
 

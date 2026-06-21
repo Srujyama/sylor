@@ -21,6 +21,7 @@ import {
 import { SimulationTheater } from "@/components/theater/SimulationTheater";
 import { CopilotPanel } from "@/components/copilot/CopilotPanel";
 import { CalibratePanel } from "@/components/calibrate/CalibratePanel";
+import { ChartDataTable } from "@/components/ui/chart-data-table";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { cn, formatCurrency, formatDate, formatNumber } from "@/lib/utils";
@@ -1011,7 +1012,7 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                         {dRevenue >= 0 ? "+" : "−"}{formatCurrency(Math.abs(dRevenue))} avg revenue
                       </span>
                     </div>
-                    <div className="flex-1 min-w-[160px] max-w-xs h-10">
+                    <div className="flex-1 min-w-[160px] max-w-xs h-10" role="img" aria-label="Line chart: success probability across recorded runs">
                       <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={spark} margin={{ top: 4, right: 4, left: 4, bottom: 4 }}>
                           <Tooltip
@@ -1022,6 +1023,14 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                           <Line type="monotone" dataKey="success" stroke="#06b6d4" strokeWidth={1.5} dot={{ r: 1.5, fill: "#06b6d4" }} />
                         </LineChart>
                       </ResponsiveContainer>
+                      <ChartDataTable
+                        caption="Success probability across recorded runs"
+                        data={spark}
+                        columns={[
+                          { key: "run", value: (row) => row.idx },
+                          { key: "success probability (%)", value: (row) => row.success },
+                        ]}
+                      />
                     </div>
                   </div>
                   {runListOpen && (
@@ -1053,6 +1062,7 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
               </CardTitle>
             </CardHeader>
             <CardContent>
+              <div role="img" aria-label={`Area chart: ${primaryLabel} projection over ${timeUnit}s with p10 (worst 10%), p50 (median), and p90 (best 10%) percentile bands`}>
               <ResponsiveContainer width="100%" height={280}>
                 <AreaChart data={timelineData} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <defs>
@@ -1078,6 +1088,17 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                   <Area type="monotone" dataKey="p10" stroke="#ef4444" strokeWidth={1.5} fill="none" strokeDasharray="4 2" />
                 </AreaChart>
               </ResponsiveContainer>
+              <ChartDataTable
+                caption={`${primaryLabel} projection percentile bands by ${timeUnit}`}
+                data={timelineData}
+                columns={[
+                  { key: timeUnit, value: (row: any) => row.month },
+                  { key: "p10 (worst 10%)", value: (row: any) => row.p10 },
+                  { key: "p50 (median)", value: (row: any) => row.p50 },
+                  { key: "p90 (best 10%)", value: (row: any) => row.p90 },
+                ]}
+              />
+              </div>
               <div className="flex gap-6 mt-3 justify-center text-xs">
                 <div className="flex items-center gap-1.5"><div className="w-6 h-0.5 border-t-2 border-dashed border-violet-500" /><span className="text-muted-foreground">Best 10%</span></div>
                 <div className="flex items-center gap-1.5"><div className="w-6 h-0.5 bg-cyan-500" /><span className="text-muted-foreground">Median</span></div>
@@ -1096,6 +1117,7 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                 </CardTitle>
               </CardHeader>
               <CardContent>
+                <div role="img" aria-label={`Bar chart: ${labels.outcomeLabel} — probability by outcome range`}>
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={outcomeDistribution} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
@@ -1112,6 +1134,15 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
+                <ChartDataTable
+                  caption={`${labels.outcomeLabel}: probability by outcome range`}
+                  data={outcomeDistribution}
+                  columns={[
+                    { key: "outcome range", value: (row: any) => row.range },
+                    { key: "probability (%)", value: (row: any) => row.probability },
+                  ]}
+                />
+                </div>
               </CardContent>
             </Card>
 
@@ -1123,6 +1154,7 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                 </CardTitle>
               </CardHeader>
               <CardContent>
+                <div role="img" aria-label={`Line chart: ${tertiaryLabel} over ${timeUnit}s`}>
                 <ResponsiveContainer width="100%" height={220}>
                   <LineChart data={timelineData} margin={{ top: 5, right: 20, left: -20, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
@@ -1133,6 +1165,15 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                     <Line type="monotone" dataKey="marketShare" stroke="#22c55e" strokeWidth={2} dot={false} name={tertiaryLabel} />
                   </LineChart>
                 </ResponsiveContainer>
+                <ChartDataTable
+                  caption={`${tertiaryLabel} over ${timeUnit}s`}
+                  data={timelineData}
+                  columns={[
+                    { key: timeUnit, value: (row: any) => row.month },
+                    { key: tertiaryLabel, value: (row: any) => row.marketShare },
+                  ]}
+                />
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -1264,6 +1305,7 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                         <div className="text-[10px] text-white/25 uppercase tracking-wider mb-2">
                           {primaryLabel.toLowerCase()} along the hero path
                         </div>
+                        <div role="img" aria-label={`Line chart: ${primaryLabel.toLowerCase()} along the hero path over ${hero.time_unit || timeUnit}s`}>
                         <ResponsiveContainer width="100%" height={220}>
                           <LineChart data={heroTimeline} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
@@ -1276,6 +1318,15 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                             <Line type="monotone" dataKey="revenue" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 2, fill: "#8b5cf6" }} />
                           </LineChart>
                         </ResponsiveContainer>
+                        <ChartDataTable
+                          caption={`${primaryLabel.toLowerCase()} along the hero path`}
+                          data={heroTimeline}
+                          columns={[
+                            { key: hero.time_unit || "t", value: (row) => row.t },
+                            { key: primaryLabel.toLowerCase(), value: (row) => row.revenue },
+                          ]}
+                        />
+                        </div>
                       </div>
                     )}
 
@@ -1640,6 +1691,7 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                     {timeline.length > 0 && (
                       <div>
                         <div className="text-[10px] text-white/25 uppercase tracking-wider mb-2">{primaryLabel.toLowerCase()} — baseline vs counterfactual</div>
+                        <div role="img" aria-label={`Area chart: ${primaryLabel.toLowerCase()} over ${timeUnit}s, baseline versus counterfactual`}>
                         <ResponsiveContainer width="100%" height={240}>
                           <AreaChart data={timeline} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                             <defs>
@@ -1663,6 +1715,16 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                             <Area type="monotone" dataKey="counterfactual" stroke="#06b6d4" strokeWidth={2} fill="url(#diffCfGrad)" />
                           </AreaChart>
                         </ResponsiveContainer>
+                        <ChartDataTable
+                          caption={`${primaryLabel.toLowerCase()} by ${timeUnit}: baseline versus counterfactual`}
+                          data={timeline}
+                          columns={[
+                            { key: timeUnit, value: (row) => row.month },
+                            { key: "baseline", value: (row) => row.baseline },
+                            { key: "counterfactual", value: (row) => row.counterfactual },
+                          ]}
+                        />
+                        </div>
                         <div className="flex gap-6 mt-2 justify-center text-xs">
                           <div className="flex items-center gap-1.5"><div className="w-6 h-0.5 border-t-2 border-dashed border-gray-400" /><span className="text-muted-foreground">baseline</span></div>
                           <div className="flex items-center gap-1.5"><div className="w-6 h-0.5 bg-cyan-500" /><span className="text-muted-foreground">counterfactual</span></div>
@@ -1788,6 +1850,7 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                       <span className="text-white/60">{formatCurrency(tornado.baseline.avg_revenue)} avg revenue</span> · {" "}
                       seed <span className="font-mono text-white/40">{tornado.base_seed}</span>
                     </div>
+                    <div role="img" aria-label="Tornado bar chart: success probability change (percentage points vs baseline) for each variable's low and high values">
                     <ResponsiveContainer width="100%" height={Math.max(220, bars.length * 44 + 40)}>
                       <BarChart data={bars} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" horizontal={false} />
@@ -1824,6 +1887,18 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                         <Bar dataKey="high" stackId="tornado" fill="#22c55e" opacity={0.75} barSize={18} />
                       </BarChart>
                     </ResponsiveContainer>
+                    <ChartDataTable
+                      caption="Tornado sensitivity: success probability change (percentage points vs baseline) by variable"
+                      data={bars}
+                      columns={[
+                        { key: "variable", value: (row) => row.label },
+                        { key: "low success change (pp)", value: (row) => row.low },
+                        { key: "high success change (pp)", value: (row) => row.high },
+                        { key: "low value", value: (row) => row.low_value },
+                        { key: "high value", value: (row) => row.high_value },
+                      ]}
+                    />
+                    </div>
                     <div className="flex gap-6 mt-2 justify-center text-xs">
                       <div className="flex items-center gap-1.5"><div className="w-3 h-2 bg-red-500/75" /><span className="text-muted-foreground">variable −{tornadoDelta}%</span></div>
                       <div className="flex items-center gap-1.5"><div className="w-3 h-2 bg-green-500/75" /><span className="text-muted-foreground">variable +{tornadoDelta}%</span></div>
@@ -1873,6 +1948,14 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
               id: c.id,
             }));
             const byId = (id: number) => candidates.find((c) => c.id === id) || null;
+
+            // Combined point list (with frontier status) mirroring the three
+            // scatter series, for the screen-reader data table.
+            const scatterTableData = [
+              ...kneePts.map((p) => ({ ...p, status: "recommended" })),
+              ...onFrontier.map((p) => ({ ...p, status: "on frontier" })),
+              ...dominated.map((p) => ({ ...p, status: "dominated" })),
+            ];
 
             return (
               <>
@@ -2102,6 +2185,7 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                               </div>
                             </div>
                           )}
+                          <div role="img" aria-label={`Scatter plot of optimizer candidates: ${singleObjective ? "candidate id" : METRIC_LABELS[xMetric]} versus ${METRIC_LABELS[yMetric]}, with dominated, on-frontier, and recommended points`}>
                           <ResponsiveContainer width="100%" height={320}>
                             <ScatterChart margin={{ top: 10, right: 20, left: 10, bottom: 20 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
@@ -2159,6 +2243,17 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                               />
                             </ScatterChart>
                           </ResponsiveContainer>
+                          <ChartDataTable
+                            caption={`Optimizer candidates: ${singleObjective ? "candidate id" : METRIC_LABELS[xMetric]} versus ${METRIC_LABELS[yMetric]}`}
+                            data={scatterTableData}
+                            columns={[
+                              { key: "candidate id", value: (row) => row.id },
+                              { key: singleObjective ? "candidate id (x)" : METRIC_LABELS[xMetric], value: (row) => row.x },
+                              { key: METRIC_LABELS[yMetric], value: (row) => row.y },
+                              { key: "status", value: (row) => row.status },
+                            ]}
+                          />
+                          </div>
                           <div className="flex flex-wrap gap-5 justify-center text-xs">
                             <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-cyan-400 inline-block" /><span className="text-muted-foreground">on frontier</span></div>
                             <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-gray-500/40 inline-block" /><span className="text-muted-foreground">dominated</span></div>
@@ -2361,6 +2456,7 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
               </CardHeader>
               <CardContent>
                 {agentActivity.length > 0 ? (
+                  <div role="img" aria-label="Pie chart: agent distribution by count">
                   <ResponsiveContainer width="100%" height={220}>
                     <PieChart>
                       <Pie data={agentActivity} cx="50%" cy="50%" innerRadius={60} outerRadius={90} paddingAngle={3} dataKey="value">
@@ -2372,6 +2468,15 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                       <Tooltip contentStyle={{ background: "var(--chart-tooltip-bg)", border: "1px solid var(--chart-tooltip-border)", borderRadius: "0", fontSize: 12 }} />
                     </PieChart>
                   </ResponsiveContainer>
+                  <ChartDataTable
+                    caption="Agent distribution by count"
+                    data={agentActivity}
+                    columns={[
+                      { key: "agent", value: (row: any) => row.name },
+                      { key: "count", value: (row: any) => row.value },
+                    ]}
+                  />
+                  </div>
                 ) : (
                   <div className="flex items-center justify-center h-[220px] text-xs text-white/20">No agent data available</div>
                 )}
@@ -2404,6 +2509,7 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
               <CardTitle className="text-base">{secondaryLabel} Over Time</CardTitle>
             </CardHeader>
             <CardContent>
+              <div role="img" aria-label={`Area chart: ${secondaryLabel} over ${timeUnit}s`}>
               <ResponsiveContainer width="100%" height={200}>
                 <AreaChart data={timelineData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                   <defs>
@@ -2419,6 +2525,15 @@ export default function SimulationDetailPage({ params }: { params: { id: string 
                   <Area type="monotone" dataKey="customers" stroke="#06b6d4" strokeWidth={2} fill="url(#custGrad)" name={secondaryLabel} />
                 </AreaChart>
               </ResponsiveContainer>
+              <ChartDataTable
+                caption={`${secondaryLabel} over ${timeUnit}s`}
+                data={timelineData}
+                columns={[
+                  { key: timeUnit, value: (row: any) => row.month },
+                  { key: secondaryLabel, value: (row: any) => row.customers },
+                ]}
+              />
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

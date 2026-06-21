@@ -14,6 +14,11 @@ const footerLinks = {
     { label: "getting started", href: "/docs" },
     { label: "changelog", href: "/changelog" },
   ],
+  legal: [
+    { label: "privacy", href: "/privacy" },
+    { label: "terms", href: "/terms" },
+    { label: "cookies", href: "/cookies" },
+  ],
 };
 
 export function Footer() {

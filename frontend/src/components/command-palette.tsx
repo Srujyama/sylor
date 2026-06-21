@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
   Search, LayoutDashboard, Layers, BarChart3, LayoutTemplate,
@@ -9,6 +9,7 @@ import {
 import { cn } from "@/lib/utils";
 import { listSimulations, mapSimulation } from "@/lib/api";
 import { getCurrentUser } from "@/lib/firebase/auth";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 
 const RECENTS_KEY = "sylor-recents";
 
@@ -86,7 +87,7 @@ export function CommandPalette() {
   const [sims, setSims] = useState<SimEntry[] | null>(null);
   const [simsLoading, setSimsLoading] = useState(false);
   const [recents, setRecents] = useState<string[]>([]);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useFocusTrap<HTMLDivElement>(open);
 
   const navigate = useCallback(
     (path: string) => router.push(path),
@@ -218,11 +219,8 @@ export function CommandPalette() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  useEffect(() => {
-    if (open) {
-      setTimeout(() => inputRef.current?.focus(), 50);
-    }
-  }, [open]);
+  // Focus is moved into the input on open by useFocusTrap (the input is
+  // marked data-autofocus), and restored to the prior element on close.
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -264,6 +262,10 @@ export function CommandPalette() {
 
       {/* Dialog */}
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
         className="absolute top-[20%] left-1/2 -translate-x-1/2 w-full max-w-lg"
         onClick={(e) => e.stopPropagation()}
       >
@@ -272,7 +274,7 @@ export function CommandPalette() {
           <div className="flex items-center gap-3 px-4 py-3 border-b border-white/[0.06]">
             <Search className="w-4 h-4 text-white/25 shrink-0" />
             <input
-              ref={inputRef}
+              data-autofocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}

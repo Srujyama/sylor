@@ -15,6 +15,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell, LineChart, Line,
 } from "recharts";
+import { ChartDataTable } from "@/components/ui/chart-data-table";
 
 const categoryColors: Record<string, string> = {
   startup: "rgba(139,92,246,0.7)",
@@ -142,6 +143,7 @@ export default function AnalyticsPage() {
         <div className="bg-[var(--page-bg)] p-5">
           <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">success rate by category</div>
           {byCategory.length > 0 ? (
+            <div role="img" aria-label="Bar chart: average success rate by category">
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={byCategory} layout="vertical" margin={{ top: 5, right: 10, left: 10, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" horizontal={false} />
@@ -158,6 +160,16 @@ export default function AnalyticsPage() {
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
+            <ChartDataTable
+              caption="Average success rate by category"
+              data={byCategory}
+              columns={[
+                { key: "category", value: (row) => row.category },
+                { key: "avg success (%)", value: (row) => row.avg_success },
+                { key: "simulations", value: (row) => row.count },
+              ]}
+            />
+            </div>
           ) : (
             <div className="flex items-center justify-center h-[220px] text-xs text-white/20">
               complete some simulations to see category insights
@@ -169,6 +181,7 @@ export default function AnalyticsPage() {
         <div className="bg-[var(--page-bg)] p-5">
           <div className="text-xs text-white/25 mb-4 tracking-widest uppercase">success trend — last 30 days</div>
           {trend.length > 1 ? (
+            <div role="img" aria-label="Line chart: average success rate over the last 30 days">
             <ResponsiveContainer width="100%" height={220}>
               <LineChart data={trend} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
@@ -181,6 +194,16 @@ export default function AnalyticsPage() {
                 <Line type="monotone" dataKey="avg_success" stroke="rgba(74,222,128,0.7)" strokeWidth={2} dot={{ r: 2, fill: "rgba(74,222,128,0.7)" }} name="avg success" />
               </LineChart>
             </ResponsiveContainer>
+            <ChartDataTable
+              caption="Average success rate over the last 30 days"
+              data={trend}
+              columns={[
+                { key: "date", value: (row) => row.label },
+                { key: "avg success (%)", value: (row) => row.avg_success },
+                { key: "simulations", value: (row) => row.count },
+              ]}
+            />
+            </div>
           ) : (
             <div className="flex items-center justify-center h-[220px] text-xs text-white/20">
               run more simulations to see your 30-day trend
